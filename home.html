@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>SINK — Home</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Image compression library -->
+    <script src="https://cdn.jsdelivr.net/npm/browser-image-compression@2.0.2/dist/browser-image-compression.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+    <link href="https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+</head>
+  <body class="bg-neutral-950 text-slate-200 antialiased selection:bg-zinc-400/20 selection:text-slate-200 font-sans overflow-x-hidden overflow-y-hidden" style="font-family: 'Josefin Sans', ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;">
+    <style>
+      /* respect safe-area inset (mobile notch / OS taskbars) */
+      :root{ --safe-bottom: env(safe-area-inset-bottom, 0px); }
+
+      /* Hide scrollbars globally but keep functionality */
+      * {
+        scrollbar-width: none; /* Firefox */
+        -ms-overflow-style: none; /* IE/Edge */
+      }
+      *::-webkit-scrollbar {
+        display: none; /* Chrome/Safari/Opera */
+      }
+
+      .messages::-webkit-scrollbar { display: none; }
+      .messages { scrollbar-width: none; -ms-overflow-style: none; }
+
+      /* Composer textarea: hide scrollbar visually but allow scrolling when needed */
+      .composer-textarea::-webkit-scrollbar { display: none; }
+      .composer-textarea { scrollbar-width: none; -ms-overflow-style: none; overflow: auto; }
+
+      /* Make sure textarea content is vertically centered within the composer */
+      .composer-row { align-items: center; }
+
+      /* Add extra bottom gap so the composer doesn't sit flush against OS taskbars */
+      /* increase base padding so there's a visible gap on desktop taskbars */
+      .composer-bottom-gap { padding-bottom: calc(24px + var(--safe-bottom)); }
+
+      /* Screen reader only - visually hidden but accessible to screen readers */
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border-width: 0;
+      }
+    </style>
+
+    <!-- Loading Screen -->
+    <div id="appLoading" class="fixed inset-0 z-50 flex items-center justify-center bg-neutral-950">
+      <div class="text-center">
+        <img src="logo.png" alt="SINK Logo" class="h-24 w-auto object-contain mx-auto mb-6 animate-pulse">
+        <div class="text-2xl text-slate-300 mb-4" style="font-weight: 600;">Loading SINK...</div>
+        <div class="flex justify-center gap-2">
+          <div class="h-2 w-2 rounded-full bg-slate-400 animate-bounce" style="animation-delay: 0s"></div>
+          <div class="h-2 w-2 rounded-full bg-slate-400 animate-bounce" style="animation-delay: 0.2s"></div>
+          <div class="h-2 w-2 rounded-full bg-slate-400 animate-bounce" style="animation-delay: 0.4s"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- App Screen -->
+    <div id="appMain" class="flex flex-col h-screen" style="display: none;">
+      <!-- App Shell -->
+      <div class="flex h-full">
+        <!-- Sidebar Toggle Controller -->
+        <input id="sidebarToggle" type="checkbox" class="peer hidden">
+
+        <!-- Sidebar -->
+        <aside class="fixed z-30 inset-y-0 left-0 w-72 max-w-[85vw] -translate-x-full peer-checked:translate-x-0 lg:translate-x-0 lg:peer-checked:-translate-x-full transition-transform duration-300 ease-out">
+          <div class="flex h-full flex-col border-r border-white/10 bg-slate-900/30 backdrop-blur-xl">
+            <div class="flex items-center px-3 py-3">
+              <div class="inline-flex items-center gap-2">
+                <img src="logo.png" alt="SINK Logo" class="h-8 w-auto object-contain">
+                <span class="text-slate-100 text-2xl tracking-tight" style="font-weight: 600; letter-spacing: -0.02em;">SINK</span>
+              </div>
+            </div>
+
+            <div class="px-3 pb-2">
+              <div class="relative">
+                <!-- Search -->
+                <div class="pointer-events-none absolute inset-y-0 left-2 flex items-center">
+                  <!-- Lucide: search -->
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" class="text-slate-400" style="stroke-width:1.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path>
+                  </svg>
+                </div>
+                <input type="text" placeholder="Search rooms, chats..." class="w-full rounded-lg bg-slate-800/10 hover:bg-slate-800/15 border border-white/10 focus:border-slate-300/20 focus:outline-none focus:ring-2 focus:ring-white/10 placeholder:text-sm px-8 py-2 text-sm">
+              </div>
+            </div>
+
+            <div class="flex-1 overflow-y-auto overflow-x-hidden">
+              <!-- Rooms -->
+              <div class="px-2">
+                <div class="px-2 pt-2 pb-1 text-xs uppercase tracking-wider text-slate-500" style="font-weight: 600;">Rooms</div>
+                <nav id="roomsList" class="space-y-1">
+                  <a href="#" title="General Room">
+                    <div class="h-[30px] w-[30px] rounded-lg bg-slate-800/10 ring-1 ring-white/10 flex items-center justify-center">
+                      <!-- Lucide: hash -->
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" class="text-slate-300" style="stroke-width:1.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="4" y1="9" x2="20" y2="9"></line>
+                        <line x1="4" y1="15" x2="20" y2="15"></line>
+                        <line x1="10" y1="3" x2="8" y2="21"></line>
+                        <line x1="16" y1="3" x2="14" y2="21"></line>
+                      </svg>
+                    </div>
+                    <div class="min-w-0 ml-3">
+                      <div class="text-slate-100 text-lg" style="font-weight: 600;">General</div>
+                      <div class="text-slate-500 text-base">Room</div>
+                    </div>
+                    <span data-side="right" class="ml-auto inline-flex items-center gap-2">
+                      <span class="status-dot h-2 w-2 rounded-full bg-emerald-400/90 ring-2 ring-emerald-400/20"></span>
+                    </span>
+                  </a>
+                </nav>
+                <button class="group flex items-center justify-center rounded-lg px-3 py-2 border border-white/10 bg-slate-800/10 hover:bg-slate-800/15 transition w-full text-center mt-4">
+                  <div class="flex items-center gap-1">
+                    <div class="inline-flex items-center justify-center h-[24px] w-[24px] text-slate-300 group-hover:text-slate-300 font-semibold text-2xl transition">+</div>
+                    <div class="flex flex-col">
+                      <span class="text-slate-200 text-xs" style="font-weight: 600;">ADD NEW ROOM</span>
+                    </div>
+                  </div>
+                </button>
+                
+                <!-- Divider after ADD NEW ROOM -->
+                <div class="my-4 h-px bg-slate-700/50"></div>
+              </div>
+
+              <!-- Chats -->
+              <div class="px-3 pb-24">
+                <div class="px-2 pt-2 pb-2 text-xs uppercase tracking-wider text-slate-500" style="font-weight: 600;">Chats</div>
+                <nav id="chatsList" class="space-y-1">
+                  <a href="#" title="Alex Chen">
+                    <img src="https://images.unsplash.com/photo-1544717305-2782549b5136?q=80&w=120&auto=format&fit=crop" alt="Alex Chen" class="h-12 w-12 rounded-lg object-cover ring-1 ring-white/10">
+                    <div class="min-w-0 ml-3">
+                      <div class="text-slate-100 text-lg" style="font-weight: 600;">Alex Chen</div>
+                      <div class="text-slate-500 text-base truncate">Got it, I'll send the file soon.</div>
+                    </div>
+                    <span data-side="right" class="ml-auto inline-flex items-center gap-3">
+                      <span class="text-sm text-slate-500">2:14 PM</span>
+                      <span class="status-dot h-2 w-2 rounded-full bg-emerald-400/90 ring-2 ring-emerald-400/20"></span>
+                      <span class="unread text-base rounded-full bg-slate-500/20 text-slate-300 px-4 py-2 border border-slate-400/20 min-w-[40px] text-center ml-1" style="font-weight: 600;">3</span>
+                    </span>
+                  </a>
+
+                  <a href="#" title="Priya Patel">
+                    <img src="https://images.unsplash.com/photo-1560250097-0b93528c311a?q=80&w=120&auto=format&fit=crop" alt="Priya Patel" class="h-12 w-12 rounded-lg object-cover ring-1 ring-white/10">
+                    <div class="min-w-0 ml-3">
+                      <div class="text-slate-100 text-lg" style="font-weight: 600;">Priya Patel</div>
+                      <div class="text-slate-500 text-base truncate">Can we move standup 10 mins?</div>
+                    </div>
+                    <span data-side="right" class="ml-auto inline-flex items-center gap-3">
+                      <span class="text-sm text-slate-500">11:02 AM</span>
+                      <span class="status-dot h-2 w-2 rounded-full bg-slate-500/90 ring-2 ring-slate-500/20"></span>
+                      <span class="unread text-base rounded-full bg-slate-500/20 text-slate-300 px-4 py-2 border border-slate-400/20 min-w-[40px] text-center ml-1" style="font-weight: 600;">1</span>
+                    </span>
+                  </a>
+
+                  <a href="#" title="Jordan Rivera">
+                    <img src="https://images.unsplash.com/photo-1527980965255-d3b416303d12?q=80&w=120&auto=format&fit=crop" alt="Jordan Rivera" class="h-12 w-12 rounded-lg object-cover ring-1 ring-white/10">
+                    <div class="min-w-0 ml-3">
+                      <div class="text-slate-100 text-lg" style="font-weight: 600;">Jordan Rivera</div>
+                      <div class="text-slate-500 text-base truncate">The mockups look great!</div>
+                    </div>
+                    <span data-side="right" class="ml-auto inline-flex items-center gap-3">
+                      <span class="text-sm text-slate-500">Yesterday</span>
+                      <span class="status-dot h-2 w-2 rounded-full bg-slate-500/90 ring-2 ring-slate-500/20"></span>
+                    </span>
+                  </a>
+
+                  <a href="#" title="Casey Nguyen">
+                    <img src="https://images.unsplash.com/photo-1544006659-f0b21884ce1d?q=80&w=120&auto=format&fit=crop" alt="Casey Nguyen" class="h-12 w-12 rounded-lg object-cover ring-1 ring-white/10">
+                    <div class="min-w-0 ml-3">
+                      <div class="text-slate-100 text-lg" style="font-weight: 600;">Casey Nguyen</div>
+                      <div class="text-slate-500 text-base truncate">Joining the call now.</div>
+                    </div>
+                    <span data-side="right" class="ml-auto inline-flex items-center gap-3">
+                      <span class="text-sm text-slate-500">9:30 AM</span>
+                      <span class="status-dot h-2 w-2 rounded-full bg-emerald-400/90 ring-2 ring-emerald-400/20"></span>
+                      <span class="unread text-base rounded-full bg-slate-500/20 text-slate-300 px-4 py-2 border border-slate-400/20 min-w-[40px] text-center ml-1" style="font-weight: 600;">1</span>
+                    </span>
+                  </a>
+
+                  <a href="#" title="Samir Hassan">
+                    <img src="https://images.unsplash.com/photo-1542326237-94b1c5a538d6?q=80&w=120&auto=format&fit=crop" alt="Samir Hassan" class="h-12 w-12 rounded-lg object-cover ring-1 ring-white/10">
+                    <div class="min-w-0 ml-3">
+                      <div class="text-slate-100 text-lg" style="font-weight: 600;">Samir Hassan</div>
+                      <div class="text-slate-500 text-base truncate">Here's the draft we discussed.</div>
+                    </div>
+                    <span data-side="right" class="ml-auto inline-flex items-center gap-3">
+                      <span class="text-sm text-slate-500">Mon</span>
+                      <span class="status-dot h-2 w-2 rounded-full bg-slate-500/90 ring-2 ring-slate-500/20"></span>
+                    </span>
+                  </a>
+
+                  <a href="#" title="Lena Müller">
+                    <img src="https://images.unsplash.com/photo-1524504388940-b1c1722653e1?q=80&w=120&auto=format&fit=crop" alt="Lena Müller" class="h-12 w-12 rounded-lg object-cover ring-1 ring-white/10">
+                    <div class="min-w-0 ml-3">
+                      <div class="text-slate-100 text-lg" style="font-weight: 600;">Lena Müller</div>
+                      <div class="text-slate-500 text-base truncate">Danke! Das hilft sehr.</div>
+                    </div>
+                    <span data-side="right" class="ml-auto inline-flex items-center gap-3">
+                      <span class="text-sm text-slate-500">Sun</span>
+                      <span class="status-dot h-2 w-2 rounded-full bg-slate-500/90 ring-2 ring-slate-500/20"></span>
+                      <span class="unread text-base rounded-full bg-slate-500/20 text-slate-300 px-4 py-2 border border-slate-400/20 min-w-[40px] text-center ml-1" style="font-weight: 600;">4</span>
+                    </span>
+                  </a>
+
+                  <a href="#" title="Diego Gómez">
+                    <img src="https://images.unsplash.com/photo-1527980965255-65f3b7d9c7f5?q=80&w=120&auto=format&fit=crop" alt="Diego Gómez" class="h-12 w-12 rounded-lg object-cover ring-1 ring-white/10">
+                    <div class="min-w-0 ml-3">
+                      <div class="text-slate-100 text-lg" style="font-weight: 600;">Diego Gómez</div>
+                      <div class="text-slate-500 text-base truncate">¿Listo para la demo?</div>
+                    </div>
+                    <span data-side="right" class="ml-auto inline-flex items-center gap-3">
+                      <span class="text-sm text-slate-500">8:45 PM</span>
+                      <span class="status-dot h-2 w-2 rounded-full bg-emerald-400/90 ring-2 ring-emerald-400/20"></span>
+                    </span>
+                  </a>
+                </nav>
+              </div>
+            </div>
+
+            <!-- Sidebar Footer: Current User -->
+            <div class="mt-auto border-t border-white/10 p-3">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                  <img id="currentUserAvatar" src="https://images.unsplash.com/photo-1547425260-76bcadfb4f2c?q=80&amp;w=120&amp;auto=format&amp;fit=crop" class="h-8 w-8 rounded-full object-cover ring-1 ring-white/10" alt="me">
+                  <div class="leading-tight">
+                    <div id="currentUserName" class="text-slate-100 text-sm" style="font-weight: 600;">Loading...</div>
+                    <div class="text-xs text-slate-500">Available</div>
+                  </div>
+                </div>
+                <button onclick="handleLogout()" class="inline-flex items-center justify-center rounded-md border border-white/10 bg-slate-800/10 hover:bg-slate-800/15 p-2 transition" title="Logout">
+                  <!-- Lucide: log-out -->
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" class="text-slate-300" style="stroke-width:1.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                    <polyline points="16,17 21,12 16,7"></polyline>
+                    <line x1="21" y1="12" x2="9" y2="12"></line>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <!-- Main -->
+        <main class="flex-1 lg:ml-72 peer-checked:lg:ml-0 transition-all duration-300 ease-out overflow-x-hidden">
+          <!-- Top Bar -->
+          <header class="sticky top-0 z-20 border-b border-white/10 bg-neutral-950/70 backdrop-blur-xl h-16">
+            <div class="flex items-center justify-between h-full px-3 md:px-4">
+              <div class="flex items-center gap-4 flex-1 min-w-0 h-full">
+                <label for="sidebarToggle" class="inline-flex items-center justify-center rounded-md border border-white/10 bg-slate-800/10 hover:bg-slate-800/15 px-2 py-2 transition cursor-pointer">
+                  <!-- Lucide: menu -->
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" class="text-slate-300" style="stroke-width:1.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 6h16M4 12h16M4 18h16"></path>
+                  </svg>
+                </label>
+                <div id="topBarContent" class="flex items-center flex-1 min-w-0 h-full">
+                </div>
+              </div>
+
+              <div class="flex items-center gap-2 h-full">
+                <button id="roomDetailsBtn" class="hidden md:hidden items-center gap-2 rounded-lg border border-white/10 bg-slate-800/10 hover:bg-slate-800/15 px-3.5 py-2 text-lg h-full my-2 transition">
+                  <!-- Lucide: users -->
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" class="text-slate-300" style="stroke-width:1.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                  </svg>
+                    <span class="text-slate-300 text-lg" style="font-weight: 500;">Room Info</span>
+                </button>
+                <button id="personDetailsBtn" class="hidden md:hidden items-center gap-2 rounded-lg border border-white/10 bg-slate-800/10 hover:bg-slate-800/15 px-3.5 py-2 text-lg h-full my-2 transition">
+                  <!-- Lucide: user -->
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" class="text-slate-300" style="stroke-width:1.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="7" r="4"></circle>
+                  </svg>
+                    <span class="text-slate-300 text-lg" style="font-weight: 500;">Info</span>
+                </button>
+                <button id="addPersonBtn" class="hidden md:hidden items-center gap-2 rounded-lg border border-white/10 bg-slate-800/10 hover:bg-slate-800/15 px-3.5 py-2 text-lg h-full my-2 transition">
+                  <!-- Lucide: user-plus -->
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" class="text-slate-300" style="stroke-width:1.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M16 11h6m-3-3v6"></path>
+                  </svg>
+                    <span class="text-slate-300 text-lg" style="font-weight: 500;">Add Member</span>
+                </button>
+                <button id="newChatBtn" class="hidden md:hidden items-center gap-2 rounded-lg border border-white/10 bg-slate-800/10 hover:bg-slate-800/15 px-3.5 py-2 text-lg h-full my-2 transition" title="New chat">
+                  <!-- Lucide: plus -->
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" class="text-slate-300" style="stroke-width:1.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 5v14M5 12h14"></path>
+                  </svg>
+                </button>
+                <button id="profileBtn" class="hidden md:hidden items-center gap-2 rounded-lg border border-white/10 bg-slate-800/10 hover:bg-slate-800/15 px-3.5 py-2 text-lg h-full my-2 transition" title="Profile">
+                  <!-- Lucide: user -->
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" class="text-slate-300" style="stroke-width:1.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="7" r="4"></circle>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </header>
+
+          <!-- Chat + Composer -->
+          <div id="mainContent" class="h-[calc(100vh-4rem)] overflow-hidden">
+          </div>
+        </main>
+      </div>
+    </div>
+    
+    <!-- Firebase SDK -->
+    <script type="module">
+      import { auth, db, doc, getDoc, rtdb, ref, get, setupPresenceTracking } from './services/firebase.js';
+      import { onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js';
+      import * as firebaseService from './services/firebaseService.js';
+      import * as uploadService from './services/uploadService.js';
+      import * as firebase from './services/firebase.js';
+
+      // Make services available globally for SinkApp
+      window.firebaseService = firebaseService;
+      window.uploadService = uploadService;
+      window.firebase = firebase;
+      
+      // Make RTDB functions available globally
+      window.rtdb = rtdb;
+      window.ref = ref;
+      window.get = get;
+
+      console.log('Home page script loaded');
+      console.log('✅ uploadService loaded:', typeof uploadService.uploadFile === 'function');
+
+      // Prevent multiple redirects
+      let isRedirecting = false;
+
+      // Boot logic - fetch data and initialize UI
+      async function startApp(user) {
+        const appLoading = document.getElementById('appLoading');
+        const appMain = document.getElementById('appMain');
+
+        try {
+          console.log('Starting app for user:', user.email);
+
+          // Initialize firebaseService with authenticated user
+          console.log('Initializing firebaseService...');
+          firebaseService.init(user);
+          console.log('firebaseService initialized');
+
+          // Setup presence tracking (online/offline status)
+          console.log('Setting up presence tracking...');
+          if (window.firebase && window.firebase.setupPresenceTracking) {
+            window.firebase.setupPresenceTracking(user.uid);
+            console.log('✅ Presence tracking initialized');
+          } else {
+            console.warn('⚠️ setupPresenceTracking not available');
+          }
+
+          // Fetch rooms and chats from Firestore with timeout
+          console.log('Fetching rooms and chats from Firestore...');
+          
+          // Add timeout protection (10 seconds)
+          const fetchPromise = firebaseService.fetchRoomsAndChats();
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Fetch timeout - taking too long to load data')), 10000)
+          );
+          
+          const { rooms, chats } = await Promise.race([fetchPromise, timeoutPromise]);
+          console.log('Fetched rooms:', rooms);
+          console.log('Fetched chats:', chats);
+
+          // Process chats to enrich with user profile data
+          // For each chat, find the other user (not current user) and fetch their profile
+          const processedChats = await Promise.all(chats.map(async (chat) => {
+            try {
+              if (!chat.members || !Array.isArray(chat.members)) {
+                console.warn('Chat has no members array:', chat.id);
+                return chat;
+              }
+
+              // Find the other user(s) in the chat (exclude current user)
+              const otherUserIds = chat.members.filter(uid => uid !== user.uid);
+              
+              if (otherUserIds.length === 0) {
+                console.warn('No other users found in chat:', chat.id);
+                return {
+                  ...chat,
+                  name: 'Empty Chat',
+                  avatar: 'https://via.placeholder.com/120',
+                  status: 'offline',
+                  statusText: 'No messages yet',
+                  unread: chat.unread || 0
+                };
+              }
+
+              // For now, show the first other user (1-on-1 chat)
+              const otherUserId = otherUserIds[0];
+              
+              // Fetch user profile from RTDB (for status and real-time data)
+              let userName = 'Unknown User';
+              let userAvatar = 'https://via.placeholder.com/120';
+              let userStatus = 'offline';
+              
+              console.log('[Chat] Fetching user data for:', otherUserId);
+              console.log('[Chat] window.rtdb:', window.rtdb ? 'available' : 'NOT available');
+              console.log('[Chat] window.ref:', window.ref ? 'available' : 'NOT available');
+              console.log('[Chat] window.get:', window.get ? 'available' : 'NOT available');
+              
+              if (window.rtdb && window.ref && window.get) {
+                try {
+                  const rtdbUserRef = window.ref(window.rtdb, `users/${otherUserId}`);
+                  const rtdbUserSnap = await window.get(rtdbUserRef);
+                  
+                  if (rtdbUserSnap.exists()) {
+                    const rtdbUser = rtdbUserSnap.val();
+                    console.log('[Chat] Found user in RTDB:', rtdbUser);
+                    userName = rtdbUser.name || rtdbUser.username || rtdbUser.email?.split('@')[0] || 'Unknown User';
+                    userAvatar = rtdbUser.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(userName)}&background=random`;
+                    userStatus = rtdbUser.status || 'offline';
+                  } else {
+                    console.warn('[Chat] User not found in RTDB:', otherUserId);
+                  }
+                } catch (rtdbError) {
+                  console.error('[Chat] Error fetching from RTDB:', rtdbError);
+                }
+              }
+              
+              // Fallback to Firestore if not in RTDB or RTDB failed
+              if (userName === 'Unknown User') {
+                console.warn('[Chat] Trying Firestore fallback for:', otherUserId);
+                try {
+                  const userProfileRef = doc(db, 'user_profiles', otherUserId);
+                  const userProfileSnap = await getDoc(userProfileRef);
+                  
+                  if (userProfileSnap.exists()) {
+                    const firestoreUser = userProfileSnap.data();
+                    console.log('[Chat] Found user in Firestore:', firestoreUser);
+                    userName = firestoreUser.displayName || firestoreUser.name || firestoreUser.username || firestoreUser.email?.split('@')[0] || 'Unknown User';
+                    userAvatar = firestoreUser.avatar || firestoreUser.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(userName)}&background=random`;
+                    // Status from Firestore is not real-time, keep as offline
+                  } else {
+                    console.warn('[Chat] User not found in Firestore:', otherUserId);
+                  }
+                } catch (fsError) {
+                  console.error('[Chat] Error fetching from Firestore:', fsError);
+                }
+              }
+              
+              // Get last message text safely
+              let lastMessageText = 'No messages yet';
+              if (chat.lastMessage) {
+                if (typeof chat.lastMessage === 'string') {
+                  lastMessageText = chat.lastMessage;
+                } else if (chat.lastMessage.text) {
+                  lastMessageText = chat.lastMessage.text;
+                }
+              }
+              
+              return {
+                ...chat,
+                name: userName,
+                avatar: userAvatar,
+                status: userStatus,
+                statusText: lastMessageText,
+                unread: chat.unread || 0 // Preserve unread count
+              };
+            } catch (error) {
+              console.error('Error processing chat:', chat.id, error);
+              return {
+                ...chat,
+                name: 'Unknown User',
+                avatar: 'https://via.placeholder.com/120',
+                status: 'offline',
+                statusText: 'No messages yet',
+                unread: chat.unread || 0 // Preserve unread count even in error case
+              };
+            }
+          }));
+
+          console.log('Processed chats with user profiles:', processedChats);
+
+          // IMPORTANT: Even with empty data, continue to show the app
+          if (rooms.length === 0 && processedChats.length === 0) {
+            console.warn('⚠️ No rooms or chats found. This is normal for a fresh Firebase setup.');
+            console.warn('💡 You may need to create collections in Firestore:');
+            console.warn('   - Create "rooms" collection in Firestore Console');
+            console.warn('   - Create "dm_threads" or "chats" collection in Firestore Console');
+          }
+
+          // Update SinkApp data with real data from Firebase
+          if (window.SinkApp) {
+            console.log('Updating SinkApp data...');
+            window.SinkApp.data.rooms = rooms.length > 0 ? rooms : [];
+            window.SinkApp.data.chats = processedChats.length > 0 ? processedChats : [];
+            
+            // Clear static messages - they will be loaded from RTDB when user opens a thread
+            window.SinkApp.data.messages = {};
+            
+            console.log('SinkApp data updated:', {
+              roomsCount: rooms.length,
+              chatsCount: processedChats.length
+            });
+          } else {
+            console.warn('SinkApp not found on window object');
+          }
+
+          // Hide loading and show app
+          console.log('Hiding loading screen and showing app...');
+          appLoading.style.display = 'none';
+          appMain.style.display = 'flex';
+
+          // Initialize the app UI (render sidebar and apply route)
+          if (window.SinkApp) {
+            console.log('Calling SinkApp.init()...');
+            window.SinkApp.init();
+            console.log('SinkApp.init() completed');
+          } else {
+            throw new Error('SinkApp is not loaded. Check if app.js is loaded correctly.');
+          }
+
+          console.log('✅ App initialized successfully');
+        } catch (error) {
+          console.error('❌ Error during app initialization:', error);
+          console.error('Error stack:', error.stack);
+          
+          // Show error to user
+          appLoading.innerHTML = `
+            <div class="text-center max-w-md px-6">
+              <div class="text-2xl text-rose-400 mb-4" style="font-weight: 600;">Error Loading App</div>
+              <div class="text-lg text-slate-400 mb-4">${error.message || 'An unexpected error occurred'}</div>
+              <div class="text-sm text-slate-500 mb-6 p-4 bg-slate-800/50 rounded-lg text-left overflow-auto max-h-40">
+                <strong>Technical Details:</strong><br>
+                ${error.stack ? error.stack.replace(/\n/g, '<br>') : 'No stack trace available'}
+              </div>
+              <button onclick="console.log('Firestore/RTDB may not be configured. Check Firebase console.'); location.reload()" class="inline-block px-6 py-3 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-200 transition mr-3">
+                Retry
+              </button>
+              <button onclick="handleLogout()" class="inline-block px-6 py-3 bg-rose-600 hover:bg-rose-500 rounded-lg text-slate-200 transition">
+                Sign Out
+              </button>
+            </div>
+          `;
+        }
+      }
+
+      // Handle user logout
+      async function handleLogout() {
+        if (isRedirecting) {
+          console.log('Already redirecting, ignoring logout request');
+          return;
+        }
+        
+        try {
+          console.log('Signing out user...');
+          isRedirecting = true;
+          await signOut(auth);
+          console.log('Sign out successful, redirecting to login...');
+          window.location.href = 'login.html?logout=true';
+        } catch (error) {
+          console.error('Error signing out:', error);
+          isRedirecting = false;
+          alert('Failed to sign out. Please try again.');
+        }
+      }
+
+      // Expose logout handler to window for button onclick
+      window.handleLogout = handleLogout;
+
+      // Expose auth to window so app.js can access current user
+      window.auth = auth;
+
+      // Handle browser close/refresh - mark user as offline
+      window.addEventListener('beforeunload', () => {
+        const user = auth.currentUser;
+        if (user && window.firebase && window.firebase.updateUserStatus) {
+          // This is a best-effort attempt
+          // The onDisconnect handler will also trigger
+          window.firebase.updateUserStatus(user.uid, 'offline');
+        }
+      });
+
+      // Listen for authentication state changes
+      console.log('Setting up auth state listener on home page');
+      onAuthStateChanged(auth, async (user) => {
+        const appLoading = document.getElementById('appLoading');
+        const appMain = document.getElementById('appMain');
+
+        console.log('Auth state changed. User:', user ? user.email : 'null');
+
+        if (!user) {
+          // No user signed in, redirect to login
+          if (isRedirecting) {
+            console.log('Already redirecting, skipping...');
+            return;
+          }
+          
+          console.log('No user authenticated, redirecting to login...');
+          isRedirecting = true;
+          
+          // Add small delay to prevent race conditions
+          setTimeout(() => {
+            window.location.href = 'login.html';
+          }, 100);
+          return;
+        }
+
+        // User is authenticated, start the app
+        console.log('User authenticated:', user.email);
+        
+        // Show loading while initializing
+        if (appLoading) appLoading.style.display = 'flex';
+        if (appMain) appMain.style.display = 'none';
+
+        // Start the app
+        await startApp(user);
+      });
+
+      console.log('Firebase auth listener initialized on home page');
+    </script>
+    <script src="app.js"></script>
+</body>
+</html>

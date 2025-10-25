@@ -1,0 +1,29 @@
+# Node modules
+node_modules/
+package-lock.json
+yarn.lock
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+
+# Temporary files
+*.tmp
+*.temp
+
+# Optional: Uncomment if you want to hide credentials later
+# services/firebase.js
+# services/firebaseService.js
+# services/uploadService.js

@@ -1,0 +1,152 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ============================================================
+    // HELPER FUNCTIONS
+    // ============================================================
+    
+    // Check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Check if user is accessing their own document
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Check if user is a member of a thread
+    function isMember(members) {
+      return isAuthenticated() && request.auth.uid in members;
+    }
+    
+    // Validate that incoming data has required fields
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+    
+    // ============================================================
+    // USER PROFILES
+    // ============================================================
+    
+    match /user_profiles/{userId} {
+      // Anyone authenticated can read any user profile (for displaying names/avatars)
+      allow read: if isAuthenticated();
+      
+      // Users can only create/update their own profile
+      allow create: if isOwner(userId) 
+                    && hasRequiredFields(['name', 'email', 'uid'])
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.email == request.auth.token.email;
+      
+      // Users can only update their own profile
+      allow update: if isOwner(userId)
+                    && request.resource.data.uid == resource.data.uid  // Can't change UID
+                    && request.resource.data.email == resource.data.email;  // Can't change email
+      
+      // Only the user can delete their own profile
+      allow delete: if isOwner(userId);
+    }
+    
+    // ============================================================
+    // ROOMS (Group Chats)
+    // ============================================================
+    
+    match /rooms/{roomId} {
+      // Any authenticated user can read rooms
+      allow read: if isAuthenticated();
+      
+      // Only members can create rooms (validate structure)
+      allow create: if isAuthenticated()
+                    && hasRequiredFields(['name', 'members'])
+                    && request.resource.data.members is list
+                    && request.resource.data.members.size() > 0
+                    && request.auth.uid in request.resource.data.members;
+      
+      // Only members can update room metadata (name, lastMessage, etc.)
+      allow update: if isAuthenticated()
+                    && request.auth.uid in resource.data.members
+                    && request.resource.data.members == resource.data.members;  // Can't change members via update
+      
+      // Only room creator or admin can delete
+      allow delete: if false;  // Disable room deletion for safety
+    }
+    
+    // ============================================================
+    // DM THREADS (Direct Messages)
+    // ============================================================
+    
+    match /dms/{dmId} {
+      // Only members can read DM metadata
+      allow read: if isAuthenticated() 
+                  && isMember(resource.data.members);
+      
+      // Users can create DMs if they are one of the members
+      allow create: if isAuthenticated()
+                    && hasRequiredFields(['members'])
+                    && request.resource.data.members is list
+                    && request.resource.data.members.size() == 2  // Only 1-on-1 DMs
+                    && request.auth.uid in request.resource.data.members;
+      
+      // Members can update lastMessage and other metadata
+      allow update: if isAuthenticated()
+                    && isMember(resource.data.members)
+                    && request.resource.data.members == resource.data.members;  // Can't change members
+      
+      // Members can delete DMs
+      allow delete: if isAuthenticated()
+                    && isMember(resource.data.members);
+    }
+    
+    // Alternative DM collection name
+    match /dm_threads/{dmId} {
+      allow read: if isAuthenticated() 
+                  && isMember(resource.data.members);
+      
+      allow create: if isAuthenticated()
+                    && hasRequiredFields(['members'])
+                    && request.resource.data.members is list
+                    && request.resource.data.members.size() == 2
+                    && request.auth.uid in request.resource.data.members;
+      
+      allow update: if isAuthenticated()
+                    && isMember(resource.data.members)
+                    && request.resource.data.members == resource.data.members;
+      
+      allow delete: if isAuthenticated()
+                    && isMember(resource.data.members);
+    }
+    
+    // ============================================================
+    // THREAD METADATA (Unread counts, last seen)
+    // ============================================================
+    
+    match /threadMeta/{threadMetaId} {
+      // Any authenticated user can read threadMeta
+      allow read: if isAuthenticated();
+      
+      // Any authenticated user can create threadMeta for their participation
+      allow create: if isAuthenticated()
+                    && hasRequiredFields(['threadType', 'threadId'])
+                    && request.resource.data.threadType in ['room', 'dm'];
+      
+      // Users can update their own unread count and lastSeen
+      allow update: if isAuthenticated()
+                    && request.resource.data.threadType == resource.data.threadType
+                    && request.resource.data.threadId == resource.data.threadId;
+      
+      // Disable deletion for data integrity
+      allow delete: if false;
+    }
+    
+    // ============================================================
+    // FALLBACK: DENY ALL OTHER ACCESS
+    // ============================================================
+    
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

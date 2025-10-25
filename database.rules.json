@@ -1,0 +1,114 @@
+{
+  "rules": {
+    
+    "users": {
+      "$userId": {
+        ".read": "auth != null",
+        ".write": "auth != null && auth.uid === $userId",
+        ".validate": "newData.hasChildren(['name', 'email', 'uid', 'status']) && newData.child('uid').val() === $userId && newData.child('status').val() is string && (newData.child('status').val() === 'online' || newData.child('status').val() === 'offline')",
+        
+        "name": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 100"
+        },
+        "username": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 50"
+        },
+        "email": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 200"
+        },
+        "uid": {
+          ".validate": "newData.val() === $userId"
+        },
+        "status": {
+          ".validate": "newData.isString() && (newData.val() === 'online' || newData.val() === 'offline')"
+        },
+        "lastSeen": {
+          ".validate": "newData.isNumber() || newData.val() === '.sv' || newData.hasChild('sv')"
+        },
+        "avatar": {
+          ".validate": "newData.isString() && newData.val().length <= 2000"
+        }
+      }
+    },
+    
+    "messages": {
+      "rooms": {
+        "$roomId": {
+          ".read": "auth != null",
+          
+          "$messageId": {
+            ".write": "auth != null && !data.exists() && newData.child('senderId').val() === auth.uid && newData.child('createdAt').isNumber()",
+            ".validate": "newData.hasChildren(['senderId', 'senderName', 'createdAt', 'type']) && newData.child('senderId').val() === auth.uid && newData.child('createdAt').isNumber() && newData.child('type').isString()",
+            
+            "senderId": {
+              ".validate": "newData.val() === auth.uid"
+            },
+            "senderName": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 100"
+            },
+            "type": {
+              ".validate": "newData.isString() && (newData.val() === 'text' || newData.val() === 'image' || newData.val() === 'video' || newData.val() === 'file')"
+            },
+            "text": {
+              ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 5000)"
+            },
+            "createdAt": {
+              ".validate": "newData.isNumber() && newData.val() <= now + 60000"
+            },
+            "image": {
+              ".validate": "!newData.exists() || newData.isString()"
+            },
+            "video": {
+              ".validate": "!newData.exists() || newData.isString()"
+            },
+            "file": {
+              ".validate": "!newData.exists() || newData.isString()"
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        }
+      },
+      
+      "dms": {
+        "$dmId": {
+          ".read": "auth != null",
+          
+          "$messageId": {
+            ".write": "auth != null && !data.exists() && newData.child('senderId').val() === auth.uid && newData.child('createdAt').isNumber()",
+            ".validate": "newData.hasChildren(['senderId', 'senderName', 'createdAt', 'type']) && newData.child('senderId').val() === auth.uid && newData.child('createdAt').isNumber() && newData.child('type').isString()",
+            
+            "senderId": {
+              ".validate": "newData.val() === auth.uid"
+            },
+            "senderName": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 100"
+            },
+            "type": {
+              ".validate": "newData.isString() && (newData.val() === 'text' || newData.val() === 'image' || newData.val() === 'video' || newData.val() === 'file')"
+            },
+            "text": {
+              ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 5000)"
+            },
+            "createdAt": {
+              ".validate": "newData.isNumber() && newData.val() <= now + 60000"
+            },
+            "image": {
+              ".validate": "!newData.exists() || newData.isString()"
+            },
+            "video": {
+              ".validate": "!newData.exists() || newData.isString()"
+            },
+            "file": {
+              ".validate": "!newData.exists() || newData.isString()"
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        }
+      }
+    }
+  }
+}
