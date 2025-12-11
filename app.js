@@ -96,46 +96,171 @@ const SinkApp = {
   currentUser: null, // Store current authenticated user
   currentThreadListener: null, // Hold active listener reference for cleanup
   messagesCache: {}, // Cache messages by thread key: { 'room:general': [...], 'dm:xyz': [...] }
+  processedMessageIds: {}, // Track processed message IDs per thread: { 'room:general': Set(['id1', 'id2']) }
   isUploading: false, // Track upload state to prevent multiple simultaneous uploads
+  isSending: false, // Track send state to prevent multiple simultaneous sends
   pendingAttachment: null, // Store uploaded file waiting to be sent
   sentMessageIds: new Set(), // Track message IDs that were sent from this client (to prevent duplicates)
-  
+
+  /**
+   * Handle media load error - replace broken image/video with placeholder
+   * @param {HTMLElement} element - The img or video element that failed to load
+   * @param {string} type - 'image' or 'video'
+   */
+  handleMediaError(element, type = 'image') {
+    if (!element || !element.parentElement) return;
+
+    // Clean 'image-off' and 'video-off' style icons
+    const icon = type === 'video'
+      ? `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" class="text-slate-400" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m16 16 2 2m4-4v4.5c0 .8-.6 1.4-1.3 1.5H3c-.8 0-1.5-.7-1.5-1.5v-9c0-.8.7-1.5 1.5-1.5h2l2-3h6l.6.9M22 2 2 22"></path><circle cx="12" cy="13" r="3"></circle></svg>`
+      : `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" class="text-slate-400" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2 22 22M9 3h8.5c.8 0 1.5.7 1.5 1.5v8.5M21 15v4.5c0 .8-.7 1.5-1.5 1.5h-15c-.8 0-1.5-.7-1.5-1.5v-13c0-.5.2-.9.6-1.2"></path></svg>`;
+
+    const message = type === 'video' ? 'This video was deleted' : 'This image was deleted';
+
+    element.parentElement.innerHTML = `
+      <div class="flex items-center justify-center gap-3 py-8 px-4 bg-slate-800/40 rounded-2xl border border-slate-700/50">
+        ${icon}
+        <span class="text-slate-400 text-sm font-medium">${message}</span>
+      </div>
+    `;
+  },
+
+  /**
+   * Download media file (image/video/file) - handles cross-origin Cloudinary URLs
+   * @param {string} url - The media URL to download
+   * @param {string} filename - Optional filename for the download
+   */
+  async downloadMedia(url, filename = null) {
+    try {
+      console.log('[downloadMedia] Starting download:', url);
+
+      // Show loading indicator (optional toast)
+      this.showInfoToast && this.showInfoToast('Downloading...');
+
+      // Check if it's a raw file (non-image/video) - these have CORS restrictions
+      const isRawFile = url.includes('/raw/upload/') ||
+        url.match(/\.(zip|rar|7z|pdf|doc|docx|xls|xlsx|ppt|pptx|txt|csv)$/i);
+
+      // For raw files, we can't use fetch due to CORS - open directly
+      // Browser will auto-download non-viewable file types
+      if (isRawFile) {
+        console.log('[downloadMedia] Raw file detected, opening in new tab');
+        window.open(url, '_blank');
+        return;
+      }
+
+      // For images/videos - try fl_attachment first (works for Cloudinary images/videos)
+      if (url.includes('cloudinary.com') && url.includes('/image/upload/')) {
+        const downloadUrl = url.replace('/upload/', '/upload/fl_attachment/');
+        window.open(downloadUrl, '_blank');
+        return;
+      }
+
+      if (url.includes('cloudinary.com') && url.includes('/video/upload/')) {
+        const downloadUrl = url.replace('/upload/', '/upload/fl_attachment/');
+        window.open(downloadUrl, '_blank');
+        return;
+      }
+
+      // For other URLs, try fetch + blob
+      const response = await fetch(url);
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+
+      const downloadFilename = filename || this.extractFilenameFromUrl(url) || 'download';
+
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = downloadFilename;
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+
+      console.log('[downloadMedia] Download complete:', downloadFilename);
+
+    } catch (error) {
+      console.error('[downloadMedia] Error:', error);
+      // Fallback: open in new tab
+      this.showErrorToast && this.showErrorToast('Download failed. Opening in new tab...');
+      window.open(url, '_blank');
+    }
+  },
+
+  /**
+   * Extract filename from URL
+   */
+  extractFilenameFromUrl(url) {
+    try {
+      const urlObj = new URL(url);
+      const pathname = urlObj.pathname;
+      // Get the last part after the last /
+      const parts = pathname.split('/');
+      return parts[parts.length - 1] || null;
+    } catch {
+      return null;
+    }
+  },
+
+  // ============================================================
+  // USER PROFILES CACHE - Reduce Firestore reads
+  // ============================================================
+  userProfilesCache: {}, // Cache user profiles: { 'userId': { displayName, email, avatar, ... }, ... }
+
+  // ============================================================
+  // REAL-TIME LISTENERS - Sidebar updates
+  // ============================================================
+  sidebarListeners: [], // Track all active sidebar listeners for cleanup
+
+  // ============================================================
+  // MESSAGE PROCESSING QUEUE - Maintain chronological order
+  // ============================================================
+  messageQueue: [], // Queue for processing messages in order
+  isProcessingQueue: false, // Flag to prevent concurrent processing
+
   // ============================================================
   // NEW: WhatsApp-style Single Placeholder System
   // ============================================================
   pendingMessages: {}, // Track optimistic messages by tempId: { '-OcGGVgjEt_uJe3XV_uu': { msg, xhr }, ... }
   pendingUploads: {},  // Track active XHR uploads for cancellation: { '-OcGGVgjEt_uJe3XV_uu': xhr }
-  
+
   // Firebase-style Push ID generation state
   _lastPushTime: 0,
   _lastRandChars: new Array(12).fill(0),
 
   // ========== ROUTER SUBSYSTEM ==========
-  
+
   /**
    * Parse the current URL hash and return a route object
    * @returns {Object} Route object with type ('room'|'chat'|'welcome') and id (string|null)
    */
   getRouteFromHash() {
     const hash = window.location.hash.slice(1); // Remove the '#'
-    
+
     if (!hash) {
       return { type: 'welcome', id: null };
     }
-    
+
     const parts = hash.split('/');
     const routeType = parts[0]; // 'room' or 'chat'
     const routeId = parts[1]; // e.g., 'general', 'yash'
-    
+
     if (routeType === 'room' && routeId) {
       return { type: 'room', id: routeId };
     } else if (routeType === 'chat' && routeId) {
       return { type: 'chat', id: routeId };
     }
-    
+
     return { type: 'welcome', id: null };
   },
-  
+
   /**
    * Apply a route by calling the appropriate view function
    * @param {Object} route - Route object from getRouteFromHash()
@@ -149,7 +274,7 @@ const SinkApp = {
       this.showWelcome();
     }
   },
-  
+
   /**
    * Navigate to a specific route by updating the hash
    * @param {string} routeType - 'room' or 'chat'
@@ -164,7 +289,7 @@ const SinkApp = {
       window.location.hash = '';
     }
   },
-  
+
   /**
    * Initialize the hash change listener
    */
@@ -175,7 +300,7 @@ const SinkApp = {
       this.applyRoute(route);
     });
   },
-  
+
   // ========== END ROUTER SUBSYSTEM ==========
 
   // Data for rooms and chats (will be populated from Firebase)
@@ -186,44 +311,405 @@ const SinkApp = {
   },
 
   // Initialize app (called after Firebase data is loaded)
-  init() {
+  async init() {
     this.initRouter(); // Initialize the router first
-    this.updateCurrentUserDisplay(); // Update user info in sidebar
+    await this.updateCurrentUserDisplay(); // Update user info in sidebar
     this.renderSidebar(); // Render sidebar with real data from Firebase
-    
+
+    // Setup real-time sidebar listeners
+    this.setupSidebarRealTimeListeners();
+
     // Apply the current route from URL hash (supports direct links)
     const route = this.getRouteFromHash();
     this.applyRoute(route);
-    
+
     this.initializeComposer();
   },
 
   // Update current user display in sidebar footer
-  updateCurrentUserDisplay() {
-    // Try to get user from Firebase auth or fallback
-    let userName = 'User';
-    let userAvatar = 'https://images.unsplash.com/photo-1547425260-76bcadfb4f2c?q=80&w=120&auto=format&fit=crop';
+  async updateCurrentUserDisplay() {
+    const defaultAvatar = 'https://images.unsplash.com/photo-1547425260-76bcadfb4f2c?q=80&w=120&auto=format&fit=crop';
 
-    // Check if we can access Firebase auth (exposed from home.html inline script)
-    if (window.auth && window.auth.currentUser) {
-      this.currentUser = window.auth.currentUser;
-      userName = window.auth.currentUser.displayName || window.auth.currentUser.email?.split('@')[0] || 'User';
-      userAvatar = window.auth.currentUser.photoURL || userAvatar;
-    }
-
-    // Update DOM elements if they exist
+    // Get DOM elements
     const userNameElement = document.getElementById('currentUserName');
+    const userEmailElement = document.getElementById('currentUserEmail');
     const userAvatarElement = document.getElementById('currentUserAvatar');
 
-    if (userNameElement) {
-      userNameElement.textContent = userName;
+    // Check if we can access Firebase auth
+    if (!window.auth || !window.auth.currentUser) {
+      console.warn('⚠️ Auth not available for user display update');
+      if (userNameElement) userNameElement.textContent = 'User';
+      if (userEmailElement) userEmailElement.textContent = 'Not logged in';
+      if (userAvatarElement) userAvatarElement.src = defaultAvatar;
+      return;
     }
 
-    if (userAvatarElement) {
-      userAvatarElement.src = userAvatar;
+    this.currentUser = window.auth.currentUser;
+    const userId = this.currentUser.uid;
+
+    try {
+      // Fetch user data from Firestore (collection name: user_profiles)
+      const userDoc = await window.getDoc(window.doc(window.db, 'user_profiles', userId));
+
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        console.log('📋 Firestore User Data:', userData);
+
+        const displayName = userData.displayName || userData.name || this.currentUser.email?.split('@')[0] || 'User';
+        const email = userData.email || this.currentUser.email || '';
+        // Check multiple possible avatar field names
+        const avatar = userData.photoURL || userData.avatar || userData.profilePicture || userData.profileImage || this.currentUser.photoURL || defaultAvatar;
+
+        console.log('👤 Parsed User Info:', { displayName, email, avatar });
+
+        // Update DOM
+        if (userNameElement) userNameElement.textContent = displayName;
+        if (userEmailElement) userEmailElement.textContent = email;
+        if (userAvatarElement) {
+          userAvatarElement.src = avatar;
+          // Add error handler for image loading failures
+          userAvatarElement.onerror = function () {
+            console.error('❌ Avatar failed to load:', avatar);
+            this.src = defaultAvatar;
+            this.onerror = null; // Prevent infinite loop
+          };
+        }
+
+        console.log('✅ Current user display updated:', { displayName, email, avatarSet: !!avatar });
+      } else {
+        // Fallback to Auth data if Firestore doc doesn't exist
+        const fallbackName = this.currentUser.displayName || this.currentUser.email?.split('@')[0] || 'User';
+        const fallbackEmail = this.currentUser.email || '';
+
+        if (userNameElement) userNameElement.textContent = fallbackName;
+        if (userEmailElement) userEmailElement.textContent = fallbackEmail;
+        if (userAvatarElement) userAvatarElement.src = this.currentUser.photoURL || defaultAvatar;
+
+        console.warn('⚠️ User document not found in Firestore, using Auth data');
+      }
+    } catch (error) {
+      console.error('❌ Error fetching user data:', error);
+
+      // Fallback to Auth data on error
+      const fallbackName = this.currentUser.displayName || this.currentUser.email?.split('@')[0] || 'User';
+      const fallbackEmail = this.currentUser.email || '';
+
+      if (userNameElement) userNameElement.textContent = fallbackName;
+      if (userEmailElement) userEmailElement.textContent = fallbackEmail;
+      if (userAvatarElement) userAvatarElement.src = this.currentUser.photoURL || defaultAvatar;
+    }
+  },
+
+  // ============================================================
+  // USER PROFILE CACHING SYSTEM
+  // ============================================================
+
+  /**
+   * Fetch user profile from cache or Firestore
+   * @param {string} userId - User ID to fetch
+   * @returns {Promise<Object>} User profile object with { displayName, email, avatar, ... }
+   */
+  async getUserProfile(userId) {
+    // Check cache first
+    if (this.userProfilesCache[userId]) {
+      console.log(`[Cache] Using cached profile for: ${userId}`);
+      return this.userProfilesCache[userId];
     }
 
-    console.log('Current user display updated:', userName);
+    // Fetch from Firestore
+    try {
+      console.log(`[Cache] Fetching profile from Firestore for: ${userId}`);
+      const userDoc = await window.getDoc(window.doc(window.db, 'user_profiles', userId));
+
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        const profile = {
+          displayName: userData.displayName || userData.name || 'User',
+          name: userData.name || userData.displayName || 'User',
+          email: userData.email || '',
+          avatar: userData.photoURL || userData.avatar || userData.profilePicture || null,
+          photoURL: userData.photoURL || userData.avatar || userData.profilePicture || null,
+          profilePicture: userData.profilePicture || userData.photoURL || userData.avatar || null,
+          status: userData.status || 'offline',
+          username: userData.username || ''
+        };
+
+        // Store in cache
+        this.userProfilesCache[userId] = profile;
+        console.log(`[Cache] ✅ Cached profile for: ${userId}`, profile);
+
+        return profile;
+      } else {
+        console.warn(`[Cache] User profile not found in Firestore: ${userId}`);
+        // Return fallback (null avatar to trigger initials in formatMessage)
+        const fallback = {
+          displayName: 'User',
+          name: 'User',
+          email: '',
+          avatar: null,
+          photoURL: null,
+          profilePicture: null,
+          status: 'offline'
+        };
+        this.userProfilesCache[userId] = fallback;
+        return fallback;
+      }
+    } catch (error) {
+      console.error(`[Cache] Error fetching user profile for ${userId}:`, error);
+      // Return fallback on error (null avatar to trigger initials)
+      const fallback = {
+        displayName: 'User',
+        name: 'User',
+        email: '',
+        avatar: null,
+        photoURL: null,
+        profilePicture: null,
+        status: 'offline'
+      };
+      return fallback;
+    }
+  },
+
+  /**
+   * Clear user profile cache (useful for logout or refresh)
+   */
+  clearUserProfileCache() {
+    this.userProfilesCache = {};
+    console.log('[Cache] User profile cache cleared');
+  },
+
+  // ============================================================
+  // REAL-TIME SIDEBAR UPDATES
+  // ============================================================
+
+  /**
+   * Setup real-time listeners for sidebar updates
+   * - Last message updates for rooms and chats
+   * - User online/offline status
+   * - Room member count changes
+   */
+  setupSidebarRealTimeListeners() {
+    console.log('[Sidebar] Setting up real-time listeners...');
+
+    // Clean up existing listeners
+    this.cleanupSidebarListeners();
+
+    // Listen for last messages in all rooms
+    this.data.rooms.forEach(room => {
+      this.listenForLastMessage('room', room.id);
+    });
+
+    // Listen for last messages in all chats
+    this.data.chats.forEach(chat => {
+      this.listenForLastMessage('dm', chat.id);
+      // Also listen for user status if it's a DM
+      if (chat.userId) {
+        this.listenForUserStatus(chat.userId, chat.id);
+      }
+    });
+
+    console.log('[Sidebar] ✅ Real-time listeners setup complete');
+  },
+
+  /**
+   * Listen for last message in a thread and update sidebar
+   */
+  listenForLastMessage(threadType, threadId) {
+    if (!window.rtdb || !window.ref || !window.onValue) {
+      console.warn('[Sidebar] RTDB not available for listening');
+      return;
+    }
+
+    const threadPath = threadType === 'room'
+      ? `rooms/${threadId}/messages`
+      : `dms/${threadId}/messages`;
+
+    const messagesRef = window.ref(window.rtdb, threadPath);
+
+    // Query for last message (limitToLast 1)
+    const lastMessageQuery = window.query(messagesRef, window.orderByChild('createdAt'), window.limitToLast(1));
+
+    const unsubscribe = window.onValue(lastMessageQuery, (snapshot) => {
+      if (snapshot.exists()) {
+        const messages = [];
+        snapshot.forEach((childSnapshot) => {
+          messages.push(childSnapshot.val());
+        });
+
+        const lastMessage = messages[messages.length - 1];
+        if (lastMessage) {
+          console.log(`[Sidebar] Last message updated for ${threadType}:${threadId}:`, lastMessage);
+          this.updateSidebarLastMessage(threadType, threadId, lastMessage);
+        }
+      }
+    });
+
+    // Store listener for cleanup
+    this.sidebarListeners.push({ type: 'lastMessage', threadType, threadId, unsubscribe });
+  },
+
+  /**
+   * Listen for user online/offline status
+   */
+  listenForUserStatus(userId, chatId) {
+    if (!window.rtdb || !window.ref || !window.onValue) {
+      console.warn('[Sidebar] RTDB not available for user status');
+      return;
+    }
+
+    const userStatusRef = window.ref(window.rtdb, `users/${userId}/status`);
+
+    const unsubscribe = window.onValue(userStatusRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const status = snapshot.val();
+        console.log(`[Sidebar] Status updated for user ${userId}:`, status);
+        this.updateSidebarUserStatus(chatId, status);
+      }
+    });
+
+    // Store listener for cleanup
+    this.sidebarListeners.push({ type: 'userStatus', userId, chatId, unsubscribe });
+  },
+
+  /**
+   * Update last message in sidebar for a thread
+   */
+  updateSidebarLastMessage(threadType, threadId, lastMessage) {
+    // Update in data object
+    if (threadType === 'room') {
+      const room = this.data.rooms.find(r => r.id === threadId);
+      if (room) {
+        room.lastMessage = this.formatLastMessageForSidebar(lastMessage);
+        // Update DOM
+        this.updateRoomInSidebar(room);
+      }
+    } else if (threadType === 'dm') {
+      const chat = this.data.chats.find(c => c.id === threadId);
+      if (chat) {
+        chat.lastMessage = this.formatLastMessageForSidebar(lastMessage);
+        // Update DOM
+        this.updateChatInSidebar(chat);
+      }
+    }
+  },
+
+  /**
+   * Update user status in sidebar for a chat
+   */
+  updateSidebarUserStatus(chatId, status) {
+    const chat = this.data.chats.find(c => c.id === chatId);
+    if (chat) {
+      chat.status = status;
+      // Update DOM
+      this.updateChatInSidebar(chat);
+    }
+  },
+
+  /**
+   * Format last message for sidebar display
+   */
+  formatLastMessageForSidebar(message) {
+    if (!message) return 'No messages';
+
+    if (message.image) return '📷 Image';
+    if (message.video) return '🎥 Video';
+    if (message.file) return '📎 File';
+    if (message.text) return message.text;
+    return 'Message';
+  },
+
+  /**
+   * Update a single room card in sidebar DOM
+   */
+  updateRoomInSidebar(room) {
+    const roomButton = document.querySelector(`[data-room-id="${room.id}"]`);
+    if (!roomButton) return;
+
+    const isActive = this.currentView === room.id;
+
+    // Re-render the button
+    const newHTML = `
+      <button 
+        type="button"
+        data-room-id="${room.id}"
+        aria-current="${isActive ? 'true' : 'false'}"
+        aria-label="Open ${room.name} room, ${room.members || 0} members${room.unread > 0 ? `, ${room.unread} unread messages` : ''}"
+        class="group flex items-center justify-between rounded-lg px-3 py-2 border ${isActive ? 'border-slate-400/20 bg-slate-500/10 hover:bg-slate-500/15' : 'border-white/10 hover:bg-slate-800/10'} transition w-full text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
+      >
+        <div class="flex items-center gap-2 min-w-0 flex-1">
+          <div class="inline-flex items-center justify-center h-[32px] w-[32px] rounded-lg bg-slate-700/50 text-slate-300 font-semibold text-base flex-shrink-0 border border-white/10" aria-hidden="true">
+            ${room.icon === '#' ? '#' : room.icon || '#'}
+          </div>
+          <div class="flex flex-col min-w-0 flex-1">
+            <span class="text-slate-${isActive ? '100' : '200'} text-sm truncate" style="font-weight: 600;">${this.escapeHtml(room.name)}</span>
+            <span class="text-xs text-slate-500 truncate">${this.escapeHtml(this.formatLastMessage(room.lastMessage))}</span>
+          </div>
+        </div>
+        ${room.unread > 0 ? `<span class="text-xs rounded-full bg-slate-500/20 text-slate-300 px-2 py-1 border border-slate-400/20 unread min-w-[24px] text-center flex-shrink-0" style="font-weight: 600;" aria-label="${room.unread} unread">${room.unread}</span>` : ''}
+      </button>
+    `;
+
+    roomButton.outerHTML = newHTML;
+
+    // Re-attach event listener
+    const newButton = document.querySelector(`[data-room-id="${room.id}"]`);
+    if (newButton) {
+      newButton.addEventListener('click', () => this.navigateTo('room', room.id));
+    }
+  },
+
+  /**
+   * Update a single chat card in sidebar DOM
+   */
+  updateChatInSidebar(chat) {
+    const chatButton = document.querySelector(`[data-chat-id="${chat.id}"]`);
+    if (!chatButton) return;
+
+    const isActive = this.currentView === chat.id;
+
+    // Re-render the button
+    const newHTML = `
+      <button 
+        type="button"
+        data-chat-id="${chat.id}"
+        aria-current="${isActive ? 'true' : 'false'}"
+        aria-label="Open chat with ${chat.name}, ${chat.status || 'offline'}${chat.unread > 0 ? `, ${chat.unread} unread messages` : ''}"
+        class="group flex items-center justify-between rounded-lg px-3 py-2 border ${isActive ? 'border-slate-400/20 bg-slate-500/10 hover:bg-slate-500/15' : 'border-white/10 hover:bg-slate-800/10'} transition w-full text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
+      >
+        <div class="flex items-center gap-2 min-w-0 flex-1">
+          <img src="${chat.avatar || 'https://via.placeholder.com/120'}" class="h-8 w-8 rounded-lg object-cover ring-1 ring-white/10 flex-shrink-0" alt="">
+          <div class="flex flex-col min-w-0 flex-1">
+            <span class="text-slate-200 text-sm truncate" style="font-weight: 600;">${this.escapeHtml(chat.name)}</span>
+            <span class="text-xs text-slate-500 truncate">${this.escapeHtml(this.formatLastMessage(chat.lastMessage))}</span>
+          </div>
+        </div>
+        <div class="flex items-center gap-3 flex-shrink-0">
+          <span class="h-2 w-2 rounded-full bg-${chat.status === 'online' ? 'emerald' : 'rose'}-400" aria-hidden="true"></span>
+          ${chat.unread > 0 ? `<span class="text-xs rounded-full bg-slate-500/20 text-slate-300 px-2 py-1 border border-slate-400/20 unread min-w-[24px] text-center" style="font-weight: 600;" aria-label="${chat.unread} unread">${chat.unread}</span>` : ''}
+        </div>
+      </button>
+    `;
+
+    chatButton.outerHTML = newHTML;
+
+    // Re-attach event listener
+    const newButton = document.querySelector(`[data-chat-id="${chat.id}"]`);
+    if (newButton) {
+      newButton.addEventListener('click', () => this.navigateTo('chat', chat.id));
+    }
+  },
+
+  /**
+   * Clean up all sidebar listeners
+   */
+  cleanupSidebarListeners() {
+    console.log(`[Sidebar] Cleaning up ${this.sidebarListeners.length} listeners`);
+    this.sidebarListeners.forEach(listener => {
+      if (listener.unsubscribe) {
+        listener.unsubscribe();
+      }
+    });
+    this.sidebarListeners = [];
   },
 
   // Render sidebar items
@@ -231,10 +717,10 @@ const SinkApp = {
     // Render rooms
     const roomsList = document.getElementById('roomsList');
     if (!roomsList) return; // Guard against missing element
-    
+
     // Add ARIA label to rooms list container
     roomsList.setAttribute('aria-label', 'Room list');
-    
+
     // Check if we have rooms to display
     if (this.data.rooms.length === 0) {
       roomsList.innerHTML = `
@@ -271,10 +757,10 @@ const SinkApp = {
     // Render chats
     const chatsList = document.getElementById('chatsList');
     if (!chatsList) return; // Guard against missing element
-    
+
     // Add ARIA label to chats list container
     chatsList.setAttribute('aria-label', 'Direct messages list');
-    
+
     // Check if we have chats to display
     if (this.data.chats.length === 0) {
       chatsList.innerHTML = `
@@ -319,7 +805,7 @@ const SinkApp = {
    */
   formatLastMessage(lastMessage) {
     if (!lastMessage) return 'No messages';
-    
+
     // If lastMessage is an object (from Firebase)
     if (typeof lastMessage === 'object') {
       if (lastMessage.image) return '📷 Image';
@@ -328,7 +814,7 @@ const SinkApp = {
       if (lastMessage.text) return lastMessage.text;
       return 'Message';
     }
-    
+
     // If it's a string, return as-is
     return lastMessage;
   },
@@ -400,7 +886,7 @@ const SinkApp = {
   },
 
   // Helper: Format Firebase message to app message format
-  formatMessage(rawMessage) {
+  async formatMessage(rawMessage) {
     // Get current user from window.auth
     const currentUser = window.auth?.currentUser;
     if (!currentUser) {
@@ -410,6 +896,18 @@ const SinkApp = {
 
     // Determine if message is from current user
     const isOutgoing = rawMessage.senderId === currentUser.uid;
+
+    // Fetch sender's profile from cache (for BOTH incoming AND outgoing messages)
+    let senderProfile = null;
+    if (rawMessage.senderId) {
+      // Check cache first - if exists, no async call needed
+      if (this.userProfilesCache[rawMessage.senderId]) {
+        senderProfile = this.userProfilesCache[rawMessage.senderId];
+      } else {
+        // Only fetch if not in cache - this maintains order for first load
+        senderProfile = await this.getUserProfile(rawMessage.senderId);
+      }
+    }
 
     // Ensure createdAt is a number (timestamp)
     let createdAtTimestamp;
@@ -421,18 +919,94 @@ const SinkApp = {
       createdAtTimestamp = Date.now();
     }
 
+    // Determine avatar (prefer cached profile, then rawMessage.senderAvatar from placeholder, then fallback)
+    // NOTE: Use userId hash for consistent color instead of 'random' to avoid color changes
+    const getUserInitials = (name) => {
+      if (!name) return 'U';
+      return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+    };
+
+    const displayName = senderProfile?.displayName || senderProfile?.name || rawMessage.senderName || 'User';
+    const initials = getUserInitials(displayName);
+
+    // Use senderId for consistent color (hash it to get same color for same user)
+    const getColorFromId = (id) => {
+      if (!id) return '3498db';
+      let hash = 0;
+      for (let i = 0; i < id.length; i++) {
+        hash = id.charCodeAt(i) + ((hash << 5) - hash);
+      }
+      const colors = ['3498db', '2ecc71', 'e74c3c', 'f39c12', '9b59b6', '1abc9c', 'e67e22', '34495e'];
+      return colors[Math.abs(hash) % colors.length];
+    };
+
+    const avatarUrl = senderProfile?.avatar ||
+      senderProfile?.photoURL ||
+      senderProfile?.profilePicture ||
+      rawMessage.senderAvatar ||
+      `https://ui-avatars.com/api/?name=${encodeURIComponent(initials)}&background=${getColorFromId(rawMessage.senderId)}&color=fff`;
+
     return {
       id: rawMessage.id,
       type: isOutgoing ? 'outgoing' : 'incoming',
-      sender: rawMessage.senderName || 'Unknown',
+      sender: senderProfile?.displayName || senderProfile?.name || rawMessage.senderName || 'Unknown',
       text: rawMessage.text || '',
       time: this.formatMessageTime(createdAtTimestamp),
       createdAt: createdAtTimestamp, // Store as number for sorting
-      avatar: rawMessage.senderAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(rawMessage.senderName || 'U')}&background=random`,
+      avatar: avatarUrl,
       image: rawMessage.image?.url || rawMessage.image || '',
       video: rawMessage.video?.url || rawMessage.video || '',
       file: rawMessage.file
     };
+  },
+
+  // ============================================================
+  // MESSAGE QUEUE PROCESSING - Maintain chronological order
+  // ============================================================
+
+  /**
+   * Add message to processing queue and process in order
+   */
+  async queueMessage(rawMessage, callback) {
+    // Add to queue with timestamp
+    this.messageQueue.push({ rawMessage, callback, timestamp: rawMessage.createdAt || Date.now() });
+
+    // Sort queue by timestamp to maintain order
+    this.messageQueue.sort((a, b) => a.timestamp - b.timestamp);
+
+    // Process queue if not already processing
+    if (!this.isProcessingQueue) {
+      await this.processMessageQueue();
+    }
+  },
+
+  /**
+   * Process messages from queue sequentially
+   */
+  async processMessageQueue() {
+    if (this.isProcessingQueue || this.messageQueue.length === 0) {
+      return;
+    }
+
+    this.isProcessingQueue = true;
+
+    while (this.messageQueue.length > 0) {
+      const { rawMessage, callback } = this.messageQueue.shift();
+
+      try {
+        // Format message (awaits profile fetch if needed)
+        const formattedMessage = await this.formatMessage(rawMessage);
+
+        if (formattedMessage && callback) {
+          // Call the callback with formatted message
+          callback(formattedMessage);
+        }
+      } catch (error) {
+        console.error('[Queue] Error processing message:', error);
+      }
+    }
+
+    this.isProcessingQueue = false;
   },
 
   // Helper: Format timestamp to time string (h:mm A)
@@ -455,17 +1029,17 @@ const SinkApp = {
    */
   formatMessageDay(timestamp) {
     if (!timestamp) return '';
-    
+
     const messageDate = new Date(timestamp);
     const today = new Date();
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
-    
+
     // Reset time to midnight for comparison
     const messageMidnight = new Date(messageDate.getFullYear(), messageDate.getMonth(), messageDate.getDate());
     const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     const yesterdayMidnight = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate());
-    
+
     if (messageMidnight.getTime() === todayMidnight.getTime()) {
       return 'Today';
     } else if (messageMidnight.getTime() === yesterdayMidnight.getTime()) {
@@ -513,7 +1087,7 @@ const SinkApp = {
     console.log(`[openRoom] Opening room: ${roomId}`);
     this.currentView = roomId;
     const room = this.data.rooms.find(r => r.id === roomId);
-    
+
     if (!room) {
       console.error('[openRoom] Room not found:', roomId);
       return;
@@ -523,6 +1097,13 @@ const SinkApp = {
     const roomTitle = roomId === 'general'
       ? `<span class="text-slate-300 font-semibold mr-2">#</span>${room.name}`
       : `${room.name}`;
+
+    // PRE-FETCH: User profiles for all members to avoid async delays in messages
+    if (Array.isArray(room.members) && room.members.length > 0) {
+      console.log('[openRoom] Pre-fetching user profiles for', room.members.length, 'members');
+      await Promise.all(room.members.map(userId => this.getUserProfile(userId)));
+      console.log('[openRoom] ✅ User profiles cached');
+    }
 
     // Fetch member names and status from RTDB using UIDs
     let membersWithStatus = [];
@@ -534,7 +1115,7 @@ const SinkApp = {
             // Use firebaseService helper
             if (window.firebaseService && window.firebaseService.getUserFromRTDB) {
               const userData = await window.firebaseService.getUserFromRTDB(uid);
-              
+
               if (userData) {
                 return {
                   name: userData.name || userData.username || 'Unknown',
@@ -542,12 +1123,12 @@ const SinkApp = {
                 };
               }
             }
-            
+
             // Fallback: direct RTDB fetch
             if (window.rtdb && window.ref && window.get) {
               const rtdbUserRef = window.ref(window.rtdb, `users/${uid}`);
               const rtdbUserSnap = await window.get(rtdbUserRef);
-              
+
               if (rtdbUserSnap.exists()) {
                 const userData = rtdbUserSnap.val();
                 return {
@@ -556,7 +1137,7 @@ const SinkApp = {
                 };
               }
             }
-            
+
             console.warn('[openRoom] Could not fetch user data for:', uid);
             return { name: 'Unknown', status: 'offline' };
           } catch (error) {
@@ -564,7 +1145,7 @@ const SinkApp = {
             return { name: 'Unknown', status: 'offline' };
           }
         });
-        
+
         membersWithStatus = await Promise.all(memberDataPromises);
       } catch (error) {
         console.error('[openRoom] Error fetching members:', error);
@@ -581,14 +1162,14 @@ const SinkApp = {
           <div class="text-xs text-slate-400 leading-tight truncate">
             <span class="mr-2 text-slate-500">Members:</span>
             ${(() => {
-              if (membersWithStatus.length > 0) {
-                return membersWithStatus.map(member => {
-                  const statusColor = member.status === 'online' ? 'emerald' : 'red';
-                  return `<span class="mr-2"><span class="text-${statusColor}-400">•</span> ${this.escapeHtml(member.name)}</span>`;
-                }).join('');
-              }
-              return '<span>No members</span>';
-            })()}
+        if (membersWithStatus.length > 0) {
+          return membersWithStatus.map(member => {
+            const statusColor = member.status === 'online' ? 'emerald' : 'red';
+            return `<span class="mr-2"><span class="text-${statusColor}-400">•</span> ${this.escapeHtml(member.name)}</span>`;
+          }).join('');
+        }
+        return '<span>No members</span>';
+      })()}
           </div>
         </div>
         
@@ -665,127 +1246,87 @@ const SinkApp = {
       this.currentThreadListener = window.firebaseService.listenForMessages(
         'room',
         roomId,
-        (rawMessage) => {
-          console.log('[openRoom] ✉️ New message received:', rawMessage);
-          
-          // Format the raw Firebase message
-          const formattedMessage = this.formatMessage(rawMessage);
-          if (!formattedMessage) {
-            console.warn('[openRoom] Failed to format message, skipping');
+        async (rawMessage) => {
+          console.log('[openRoom] ✉️ Received message:', rawMessage.id);
+
+          // ================================================================
+          // STEP 1: Deduplicate - Check if already processed
+          // ================================================================
+          if (!this.processedMessageIds[threadKey]) {
+            this.processedMessageIds[threadKey] = new Set();
+          }
+
+          if (this.processedMessageIds[threadKey].has(rawMessage.id)) {
+            console.log('[openRoom] ⏭️ Already processed, skipping:', rawMessage.id);
             return;
           }
-          
-          console.log('[openRoom] ✅ Formatted message:', formattedMessage);
-          
+
           // ================================================================
-          // CRITICAL: WhatsApp-style Single-Placeholder Merge Logic
+          // STEP 2: Check if this is OUR optimistic placeholder coming back
           // ================================================================
-          // Check if this message matches a pending optimistic placeholder
-          // If YES: Update existing placeholder in-place (no duplicate)
-          // If NO: Render as new incoming message
-          
-          const matchId = formattedMessage.tempId || formattedMessage.id;
-          
-          // 1. Check pendingMessages first (our local optimistic placeholders)
+          const matchId = rawMessage.tempId || rawMessage.id;
+
           if (this.pendingMessages[matchId]) {
-            console.log('[openRoom] 🔄 Merging Firebase message into pending placeholder:', matchId);
-            
-            // Merge Firebase data into pending message
-            this.pendingMessages[matchId] = { ...this.pendingMessages[matchId], ...formattedMessage, status: 'delivered' };
-            
-            // Update DOM bubble
+            console.log('[openRoom] 🔄 Our sent message confirmed by Firebase:', matchId);
+
+            // Just update status - placeholder already rendered
             const existingBubble = document.querySelector(`[data-temp-id="${matchId}"]`);
             if (existingBubble) {
-              existingBubble.setAttribute('data-message-id', formattedMessage.id);
-              existingBubble.setAttribute('data-firebase-id', formattedMessage.id);
+              existingBubble.setAttribute('data-message-id', rawMessage.id);
+              existingBubble.setAttribute('data-firebase-id', rawMessage.id);
               existingBubble.setAttribute('data-status', 'delivered');
             }
-            
-            // Update cache
+
+            // Update cache with full data
+            const formattedMessage = await this.formatMessage(rawMessage);
             const cacheIndex = this.messagesCache[threadKey].findIndex(m => m.tempId === matchId || m.id === matchId);
             if (cacheIndex !== -1) {
               this.messagesCache[threadKey][cacheIndex] = formattedMessage;
-            } else {
-              this.messagesCache[threadKey].push(formattedMessage);
             }
-            
-            // Move from pending to regular (optional cleanup)
+
             delete this.pendingMessages[matchId];
-            
-            console.log('[openRoom] ✅ Merged successfully, no duplicate created');
-            return; // CRITICAL: Don't create new bubble
+            this.processedMessageIds[threadKey].add(rawMessage.id);
+            return; // Don't render duplicate
           }
-          
-          // 2. Check if bubble with tempId already exists in DOM (backup check)
-          if (formattedMessage.tempId) {
-            const existingBubble = document.querySelector(`[data-temp-id="${formattedMessage.tempId}"]`);
-            if (existingBubble) {
-              console.log('[openRoom] 🔄 Found existing DOM bubble with tempId, updating:', formattedMessage.tempId);
-              
-              existingBubble.setAttribute('data-message-id', formattedMessage.id);
-              existingBubble.setAttribute('data-firebase-id', formattedMessage.id);
-              existingBubble.setAttribute('data-status', 'delivered');
-              
-              // Update cache
-              const cacheIndex = this.messagesCache[threadKey].findIndex(m => m.tempId === formattedMessage.tempId);
-              if (cacheIndex !== -1) {
-                this.messagesCache[threadKey][cacheIndex] = formattedMessage;
-              } else {
-                this.messagesCache[threadKey].push(formattedMessage);
-              }
-              
-              return; // Don't create duplicate
-            }
-          }
-          
-          // 3. Check if message already exists in cache by ID (avoid duplicates)
-          const exists = this.messagesCache[threadKey].some(m => m.id === formattedMessage.id);
-          if (exists) {
-            console.log('[openRoom] Message already in cache, skipping');
+
+          // ================================================================
+          // STEP 3: This is a NEW message (from another user or initial load)
+          // ================================================================
+
+          // Check if already in cache (initial load from listener)
+          const existsInCache = this.messagesCache[threadKey].some(m => m.id === rawMessage.id);
+          if (existsInCache) {
+            console.log('[openRoom] Already in cache, skipping render:', rawMessage.id);
+            this.processedMessageIds[threadKey].add(rawMessage.id);
             return;
           }
-          
-          // 4. Legacy: Check sentMessageIds (old duplicate prevention)
-          if (this.sentMessageIds.has(formattedMessage.id)) {
-            console.log('[openRoom] ⏭️ Skipping (legacy sentMessageIds check)');
+
+          // Format message
+          const formattedMessage = await this.formatMessage(rawMessage);
+          if (!formattedMessage) {
+            console.warn('[openRoom] Failed to format message');
             return;
           }
-          
-          // ================================================================
-          // No match found: This is a NEW incoming message from another user
-          // ================================================================
-          
+
           // Add to cache
           this.messagesCache[threadKey].push(formattedMessage);
-          
-          // Sort messages by createdAt timestamp
+
+          // Sort by timestamp
           this.messagesCache[threadKey].sort((a, b) => {
             const timeA = typeof a.createdAt === 'number' ? a.createdAt : new Date(a.createdAt || 0).getTime();
             const timeB = typeof b.createdAt === 'number' ? b.createdAt : new Date(b.createdAt || 0).getTime();
             return timeA - timeB;
           });
-          
-          console.log(`[openRoom] Cache now has ${this.messagesCache[threadKey].length} messages`);
-          
-          // Re-render only if still viewing this room
+
+          // Mark as processed
+          this.processedMessageIds[threadKey].add(rawMessage.id);
+
+          console.log(`[openRoom] Added new message. Cache now: ${this.messagesCache[threadKey].length}`);
+
+          // Re-render if viewing this room
           if (this.currentView === roomId) {
-            // If this is the first message (cache was empty), render the full chat
-            if (this.messagesCache[threadKey].length === 1) {
-              console.log('[openRoom] First message received, rendering chat');
-              this.renderChat(this.messagesCache[threadKey], room.name);
-            } else {
-              // Otherwise, just append the new message
-              console.log('[openRoom] Appending new message to chat');
-              this.appendMessage(formattedMessage);
-            }
-            
-            // Mark message as read (optional - for future unread count feature)
-            if (window.firebaseService && window.firebaseService.markRead && formattedMessage.type === 'incoming') {
-              const currentUser = window.auth?.currentUser;
-              if (currentUser) {
-                window.firebaseService.markRead('room', roomId, currentUser.uid);
-              }
-            }
+            console.log('[openRoom] Re-rendering with', this.messagesCache[threadKey].length, 'messages');
+            this.renderChat(this.messagesCache[threadKey], room.name);
           }
         }
       );
@@ -801,7 +1342,7 @@ const SinkApp = {
       try {
         await window.firebaseService.markThreadRead('room', roomId, currentUser.uid);
         console.log('[openRoom] ✅ Marked room as read');
-        
+
         // Update unread count in sidebar
         const roomData = this.data.rooms.find(r => r.id === roomId);
         if (roomData) {
@@ -821,13 +1362,20 @@ const SinkApp = {
     console.log(`[openChat] Opening chat: ${chatId}`);
     this.currentView = chatId;
     const chat = this.data.chats.find(c => c.id === chatId);
-    
+
     if (!chat) {
       console.error('[openChat] Chat not found:', chatId);
       return;
     }
 
     const threadKey = `dm:${chatId}`;
+
+    // PRE-FETCH: User profile for chat participant to avoid async delays
+    if (chat.userId) {
+      console.log('[openChat] Pre-fetching user profile for:', chat.userId);
+      await this.getUserProfile(chat.userId);
+      console.log('[openChat] ✅ User profile cached');
+    }
 
     // Update header - Android LinearLayout style structure
     document.getElementById('topBarContent').innerHTML = `
@@ -895,117 +1443,87 @@ const SinkApp = {
       this.currentThreadListener = window.firebaseService.listenForMessages(
         'dm',
         chatId,
-        (rawMessage) => {
-          console.log('[openChat] ✉️ New message received:', rawMessage);
-          
-          // Format the raw Firebase message
-          const formattedMessage = this.formatMessage(rawMessage);
-          if (!formattedMessage) {
-            console.warn('[openChat] Failed to format message, skipping');
+        async (rawMessage) => {
+          console.log('[openChat] ✉️ Received message:', rawMessage.id);
+
+          // ================================================================
+          // STEP 1: Deduplicate - Check if already processed
+          // ================================================================
+          if (!this.processedMessageIds[threadKey]) {
+            this.processedMessageIds[threadKey] = new Set();
+          }
+
+          if (this.processedMessageIds[threadKey].has(rawMessage.id)) {
+            console.log('[openChat] ⏭️ Already processed, skipping:', rawMessage.id);
             return;
           }
-          
-          console.log('[openChat] ✅ Formatted message:', formattedMessage);
-          
+
           // ================================================================
-          // CRITICAL: WhatsApp-style Single-Placeholder Merge Logic
+          // STEP 2: Check if this is OUR optimistic placeholder coming back
           // ================================================================
-          const matchId = formattedMessage.tempId || formattedMessage.id;
-          
-          // 1. Check pendingMessages first
+          const matchId = rawMessage.tempId || rawMessage.id;
+
           if (this.pendingMessages[matchId]) {
-            console.log('[openChat] 🔄 Merging Firebase message into pending placeholder:', matchId);
-            
-            this.pendingMessages[matchId] = { ...this.pendingMessages[matchId], ...formattedMessage, status: 'delivered' };
-            
+            console.log('[openChat] 🔄 Our sent message confirmed by Firebase:', matchId);
+
+            // Just update status - placeholder already rendered
             const existingBubble = document.querySelector(`[data-temp-id="${matchId}"]`);
             if (existingBubble) {
-              existingBubble.setAttribute('data-message-id', formattedMessage.id);
-              existingBubble.setAttribute('data-firebase-id', formattedMessage.id);
+              existingBubble.setAttribute('data-message-id', rawMessage.id);
+              existingBubble.setAttribute('data-firebase-id', rawMessage.id);
               existingBubble.setAttribute('data-status', 'delivered');
             }
-            
+
+            // Update cache with full data
+            const formattedMessage = await this.formatMessage(rawMessage);
             const cacheIndex = this.messagesCache[threadKey].findIndex(m => m.tempId === matchId || m.id === matchId);
             if (cacheIndex !== -1) {
               this.messagesCache[threadKey][cacheIndex] = formattedMessage;
-            } else {
-              this.messagesCache[threadKey].push(formattedMessage);
             }
-            
+
             delete this.pendingMessages[matchId];
-            console.log('[openChat] ✅ Merged successfully, no duplicate created');
-            return;
+            this.processedMessageIds[threadKey].add(rawMessage.id);
+            return; // Don't render duplicate
           }
-          
-          // 2. Check DOM for existing bubble
-          if (formattedMessage.tempId) {
-            const existingBubble = document.querySelector(`[data-temp-id="${formattedMessage.tempId}"]`);
-            if (existingBubble) {
-              console.log('[openChat] 🔄 Found existing DOM bubble with tempId, updating:', formattedMessage.tempId);
-              
-              existingBubble.setAttribute('data-message-id', formattedMessage.id);
-              existingBubble.setAttribute('data-firebase-id', formattedMessage.id);
-              existingBubble.setAttribute('data-status', 'delivered');
-              
-              const cacheIndex = this.messagesCache[threadKey].findIndex(m => m.tempId === formattedMessage.tempId);
-              if (cacheIndex !== -1) {
-                this.messagesCache[threadKey][cacheIndex] = formattedMessage;
-              } else {
-                this.messagesCache[threadKey].push(formattedMessage);
-              }
-              
-              return;
-            }
-          }
-          
-          // 3. Check cache for existing message
-          const exists = this.messagesCache[threadKey].some(m => m.id === formattedMessage.id);
-          if (exists) {
-            console.log('[openChat] Message already in cache, skipping');
-            return;
-          }
-          
-          // 4. Legacy check
-          if (this.sentMessageIds.has(formattedMessage.id)) {
-            console.log('[openChat] ⏭️ Skipping (legacy sentMessageIds check)');
-            return;
-          }
-          
+
           // ================================================================
-          // No match found: This is a NEW incoming message
+          // STEP 3: This is a NEW message (from another user or initial load)
           // ================================================================
-          
+
+          // Check if already in cache (initial load from listener)
+          const existsInCache = this.messagesCache[threadKey].some(m => m.id === rawMessage.id);
+          if (existsInCache) {
+            console.log('[openChat] Already in cache, skipping render:', rawMessage.id);
+            this.processedMessageIds[threadKey].add(rawMessage.id);
+            return;
+          }
+
+          // Format message
+          const formattedMessage = await this.formatMessage(rawMessage);
+          if (!formattedMessage) {
+            console.warn('[openChat] Failed to format message');
+            return;
+          }
+
           // Add to cache
           this.messagesCache[threadKey].push(formattedMessage);
-          
-          // Sort messages by createdAt timestamp
+
+          // Sort by timestamp
           this.messagesCache[threadKey].sort((a, b) => {
             const timeA = typeof a.createdAt === 'number' ? a.createdAt : new Date(a.createdAt || 0).getTime();
             const timeB = typeof b.createdAt === 'number' ? b.createdAt : new Date(b.createdAt || 0).getTime();
             return timeA - timeB;
           });
-          
-          console.log(`[openChat] Cache now has ${this.messagesCache[threadKey].length} messages`);
-          
-          // Re-render only if still viewing this chat
+
+          // Mark as processed
+          this.processedMessageIds[threadKey].add(rawMessage.id);
+
+          console.log(`[openChat] Added new message. Cache now: ${this.messagesCache[threadKey].length}`);
+
+          // Re-render if viewing this chat
           if (this.currentView === chatId) {
-            // If this is the first message (cache was empty), render the full chat
-            if (this.messagesCache[threadKey].length === 1) {
-              console.log('[openChat] First message received, rendering chat');
-              this.renderChat(this.messagesCache[threadKey], chat.name);
-            } else {
-              // Otherwise, just append the new message
-              console.log('[openChat] Appending new message to chat');
-              this.appendMessage(formattedMessage);
-            }
-            
-            // Mark message as read (optional - for future unread count feature)
-            if (window.firebaseService && window.firebaseService.markRead && formattedMessage.type === 'incoming') {
-              const currentUser = window.auth?.currentUser;
-              if (currentUser) {
-                window.firebaseService.markRead('dm', chatId, currentUser.uid);
-              }
-            }
+            console.log('[openChat] Re-rendering with', this.messagesCache[threadKey].length, 'messages');
+            this.renderChat(this.messagesCache[threadKey], chat.name);
           }
         }
       );
@@ -1021,7 +1539,7 @@ const SinkApp = {
       try {
         await window.firebaseService.markThreadRead('dm', chatId, currentUser.uid);
         console.log('[openChat] ✅ Marked chat as read');
-        
+
         // Update unread count in sidebar
         const chatData = this.data.chats.find(c => c.id === chatId);
         if (chatData) {
@@ -1067,7 +1585,7 @@ const SinkApp = {
   genTempId() {
     // Firebase push ID character set
     const PUSH_CHARS = '-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz';
-    
+
     // Get current timestamp
     let now = new Date().getTime();
     const duplicateTime = (now === this._lastPushTime);
@@ -1079,7 +1597,7 @@ const SinkApp = {
       timeStampChars[i] = PUSH_CHARS.charAt(now % 64);
       now = Math.floor(now / 64);
     }
-    
+
     let id = timeStampChars.join('');
 
     // Add 12 random characters for uniqueness
@@ -1095,7 +1613,7 @@ const SinkApp = {
       }
       this._lastRandChars[i]++;
     }
-    
+
     for (let i = 0; i < 12; i++) {
       id += PUSH_CHARS.charAt(this._lastRandChars[i]);
     }
@@ -1125,7 +1643,7 @@ const SinkApp = {
   escapeHtml(input) {
     // Handle non-string input by converting to string first
     const str = input == null ? '' : String(input);
-    
+
     // Map of characters to their HTML entity equivalents
     const htmlEscapeMap = {
       '&': '&amp;',
@@ -1135,7 +1653,7 @@ const SinkApp = {
       "'": '&#39;',
       '/': '&#x2F;'
     };
-    
+
     // Replace each special character with its entity
     return str.replace(/[&<>"'\/]/g, (char) => htmlEscapeMap[char]);
   },
@@ -1189,13 +1707,13 @@ const SinkApp = {
     const safeSender = this.escapeHtml(msg.sender || '');
     const safeTime = this.escapeHtml(msg.time || '');
     const safeText = msg.text ? this.escapeHtml(msg.text) : '';
-    
+
     // Use default avatar if not provided
     const defaultAvatar = 'https://images.unsplash.com/photo-1547425260-76bcadfb4f2c?q=80&w=120&auto=format&fit=crop';
     const avatar = msg.avatar || defaultAvatar;
     const image = msg.image || '';
     const video = msg.video || '';
-    
+
     return `
     <div class="mb-4">
       <div class="flex items-end gap-3">
@@ -1208,54 +1726,55 @@ const SinkApp = {
           ${safeText ? `<p class="text-slate-200 text-sm leading-relaxed mx-1 mb-2">${safeText}</p>` : ''}
           ${image ? `
             <div class="relative group -mx-3 -mb-2 ${safeText ? 'mt-1' : 'mt-3'}">
-              <img src="${image}" alt="preview" class="w-full max-h-80 object-cover rounded-2xl">
+              <img src="${image}" alt="preview" class="w-full max-h-80 object-cover rounded-2xl" onerror="SinkApp.handleMediaError(this, 'image')">
               <div class="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition"></div>
               <div class="absolute top-2 right-2 flex items-center gap-2">
-                <a href="${image}" download class="inline-flex items-center justify-center rounded-lg bg-slate-900/70 backdrop-blur-md px-3 py-3 text-white hover:bg-slate-900/80 transition">
+                <button onclick="SinkApp.downloadMedia('${image}')" class="inline-flex items-center justify-center rounded-lg bg-slate-900/70 backdrop-blur-md px-3 py-3 text-white hover:bg-slate-900/80 transition cursor-pointer">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                     <polyline points="7,10 12,15 17,10"></polyline>
                     <line x1="12" y1="15" x2="12" y2="3"></line>
                   </svg>
-                </a>
+                </button>
               </div>
             </div>
           ` : ''}
           ${video ? `
             <div class="relative group -mx-3 -mb-2 mt-3">
-              <video controls class="w-full max-h-80 object-cover rounded-2xl">
-                <source src="${video}" type="video/mp4">
-              </video>
+              <video controls playsinline class="w-full max-h-80 object-cover rounded-2xl" src="${video}" onerror="SinkApp.handleMediaError(this, 'video')"></video>
               <div class="absolute top-2 right-2">
-                <a href="${video}" download class="inline-flex items-center justify-center rounded-lg bg-slate-900/70 backdrop-blur-md px-3 py-3 text-white hover:bg-slate-900/80 transition">
+                <button onclick="SinkApp.downloadMedia('${video}')" class="inline-flex items-center justify-center rounded-lg bg-slate-900/70 backdrop-blur-md px-3 py-3 text-white hover:bg-slate-900/80 transition cursor-pointer">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                     <polyline points="7,10 12,15 17,10"></polyline>
                     <line x1="12" y1="15" x2="12" y2="3"></line>
                   </svg>
-                </a>
+                </button>
               </div>
             </div>
           ` : ''}
           ${msg.file ? `
-            <div class="px-2 pb-2 mt-3">
-              <div class="flex items-center gap-4 rounded-xl border border-white/10 bg-slate-800/15 px-2 py-1">
-                <div class="flex items-center gap-3">
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" class="text-slate-300" style="stroke-width:1.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path>
-                  </svg>
-                  <div class="leading-tight">
-                    <div class="text-slate-100 text-base" style="font-weight: 600;">${this.escapeHtml(msg.file.name || '')}</div>
-                    <div class="text-sm text-slate-500">${this.formatFileSize(msg.file.size || 0)}</div>
+            <div class="-mx-3 -mb-2 mt-3">
+              <div class="flex items-center justify-between gap-3 rounded-2xl bg-slate-800/30 px-3 py-2.5">
+                <div class="flex items-center gap-3 min-w-0">
+                  <div class="flex-shrink-0 w-10 h-10 rounded-lg bg-slate-700/50 flex items-center justify-center">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" class="text-slate-400" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                      <path d="M14 2v6h6"></path>
+                    </svg>
+                  </div>
+                  <div class="min-w-0">
+                    <div class="text-slate-200 text-sm truncate">${this.escapeHtml(msg.file.name || 'File')}</div>
+                    <div class="text-xs text-slate-500">${this.formatFileSize(msg.file.size || 0)}</div>
                   </div>
                 </div>
-                <a href="${msg.file.url || '#'}" target="_blank" class="inline-flex items-center justify-center rounded-lg bg-slate-900/70 backdrop-blur-md px-2 py-2 text-white hover:bg-slate-900/80 transition">
+                <button onclick="SinkApp.downloadMedia('${msg.file.url || '#'}')" class="flex-shrink-0 inline-flex items-center justify-center rounded-lg bg-slate-900/70 backdrop-blur-md p-2.5 text-white hover:bg-slate-900/80 transition cursor-pointer">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                     <polyline points="7,10 12,15 17,10"></polyline>
                     <line x1="12" y1="15" x2="12" y2="3"></line>
                   </svg>
-                </a>
+                </button>
               </div>
             </div>
           ` : ''}
@@ -1276,13 +1795,13 @@ const SinkApp = {
     const safeTime = this.escapeHtml(msg.time || '');
     const safeText = msg.text ? this.escapeHtml(msg.text) : '';
     const status = msg.status || 'delivered'; // sending | sent | delivered | failed
-    
+
     // Use default avatar if not provided
     const defaultAvatar = 'https://images.unsplash.com/photo-1547425260-76bcadfb4f2c?q=80&w=120&auto=format&fit=crop';
     const avatar = msg.avatar || defaultAvatar;
     const image = msg.image || '';
     const video = msg.video || '';
-    
+
     return `
     <div class="mb-4" data-message-id="${msg.id}" data-temp-id="${msg.tempId || msg.id}" data-status="${status}">
       <div class="flex items-end gap-3 justify-end">
@@ -1294,54 +1813,55 @@ const SinkApp = {
           ${safeText ? `<p class="text-slate-200 text-sm leading-relaxed mx-1 mb-2">${safeText}</p>` : ''}
           ${image ? `
             <div class="relative group -mx-3 -mb-2 ${safeText ? 'mt-1' : 'mt-3'}">
-              <img src="${image}" alt="preview" class="w-full max-h-80 object-cover rounded-2xl">
+              <img src="${image}" alt="preview" class="w-full max-h-80 object-cover rounded-2xl" onerror="SinkApp.handleMediaError(this, 'image')">
               <div class="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition"></div>
               <div class="absolute top-2 right-2">
-                <a href="${image}" download class="inline-flex items-center justify-center rounded-lg bg-slate-900/70 backdrop-blur-md px-3 py-3 text-white hover:bg-slate-900/80 transition">
+                <button onclick="SinkApp.downloadMedia('${image}')" class="inline-flex items-center justify-center rounded-lg bg-slate-900/70 backdrop-blur-md px-3 py-3 text-white hover:bg-slate-900/80 transition cursor-pointer">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                     <polyline points="7,10 12,15 17,10"></polyline>
                     <line x1="12" y1="15" x2="12" y2="3"></line>
                   </svg>
-                </a>
+                </button>
               </div>
             </div>
           ` : ''}
           ${video ? `
             <div class="relative -mx-3 -mb-2 mt-3">
-              <video controls class="w-full max-h-80 bg-black/40 object-cover rounded-2xl">
-                <source src="${video}" type="video/mp4">
-              </video>
+              <video controls playsinline class="w-full max-h-80 bg-black/40 object-cover rounded-2xl" src="${video}" onerror="SinkApp.handleMediaError(this, 'video')"></video>
               <div class="absolute top-2 right-2">
-                <a href="${video}" download class="inline-flex items-center justify-center rounded-lg bg-slate-900/70 backdrop-blur-md px-3 py-3 text-white hover:bg-slate-900/80 transition">
+                <button onclick="SinkApp.downloadMedia('${video}')" class="inline-flex items-center justify-center rounded-lg bg-slate-900/70 backdrop-blur-md px-3 py-3 text-white hover:bg-slate-900/80 transition cursor-pointer">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                     <polyline points="7,10 12,15 17,10"></polyline>
                     <line x1="12" y1="15" x2="12" y2="3"></line>
                   </svg>
-                </a>
+                </button>
               </div>
             </div>
           ` : ''}
           ${msg.file ? `
-            <div class="px-2 pb-2 mt-3">
-              <div class="flex items-center gap-4 rounded-xl border border-white/10 bg-slate-800/15 px-2 py-1">
-                <div class="flex items-center gap-3">
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" class="text-slate-300" style="stroke-width:1.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path>
-                  </svg>
-                  <div class="leading-tight">
-                    <div class="text-slate-100 text-base" style="font-weight: 600;">${this.escapeHtml(msg.file.name || '')}</div>
-                    <div class="text-sm text-slate-500">${this.formatFileSize(msg.file.size || 0)}</div>
+            <div class="-mx-3 -mb-2 mt-3">
+              <div class="flex items-center justify-between gap-3 rounded-2xl bg-slate-800/30 px-3 py-2.5">
+                <div class="flex items-center gap-3 min-w-0">
+                  <div class="flex-shrink-0 w-10 h-10 rounded-lg bg-slate-700/50 flex items-center justify-center">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" class="text-slate-400" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                      <path d="M14 2v6h6"></path>
+                    </svg>
+                  </div>
+                  <div class="min-w-0">
+                    <div class="text-slate-200 text-sm truncate">${this.escapeHtml(msg.file.name || 'File')}</div>
+                    <div class="text-xs text-slate-500">${this.formatFileSize(msg.file.size || 0)}</div>
                   </div>
                 </div>
-                <a href="${msg.file.url || '#'}" target="_blank" class="inline-flex items-center justify-center rounded-lg bg-slate-900/70 backdrop-blur-md px-2 py-2 text-white hover:bg-slate-900/80 transition">
+                <button onclick="SinkApp.downloadMedia('${msg.file.url || '#'}')" class="flex-shrink-0 inline-flex items-center justify-center rounded-lg bg-slate-900/70 backdrop-blur-md p-2.5 text-white hover:bg-slate-900/80 transition cursor-pointer">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                     <polyline points="7,10 12,15 17,10"></polyline>
                     <line x1="12" y1="15" x2="12" y2="3"></line>
                   </svg>
-                </a>
+                </button>
               </div>
             </div>
           ` : ''}
@@ -1360,10 +1880,10 @@ const SinkApp = {
     const isImage = msg.fileType?.startsWith('image/');
     const isVideo = msg.fileType?.startsWith('video/');
     const status = msg.status || 'uploading'; // uploading | sending | sent | delivered | failed
-    
+
     // Default avatar
     const defaultAvatar = 'https://images.unsplash.com/photo-1547425260-76bcadfb4f2c?q=80&w=120&auto=format&fit=crop';
-    
+
     return `
     <div class="mb-4" data-message-id="${msg.id}" data-temp-id="${msg.tempId || msg.id}" data-status="${status}">
       <div class="flex items-end gap-3 justify-end">
@@ -1447,42 +1967,43 @@ const SinkApp = {
                 </div>
               </div>
             ` : `
-              <!-- File placeholder with progress -->
-              <div class="px-2 pb-2 mt-3 relative">
-                <div class="flex items-center gap-4 rounded-xl border border-white/10 bg-slate-800/15 px-2 py-1">
-                  <div class="flex items-center gap-3">
-                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" class="text-slate-300" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                      <path d="M14 2v6h6"></path>
-                    </svg>
-                    <div class="leading-tight">
-                      <div class="text-slate-100 text-base font-semibold">${this.escapeHtml(msg.fileName || 'File')}</div>
-                      <div class="text-sm text-slate-500">${this.formatFileSize(msg.fileSize || 0)}</div>
+              <!-- File placeholder with progress on right side -->
+              <div class="mt-3">
+                <div class="flex items-center justify-between gap-3 rounded-2xl bg-slate-800/30 px-3 py-2.5">
+                  <div class="flex items-center gap-3 min-w-0">
+                    <div class="flex-shrink-0 w-10 h-10 rounded-lg bg-slate-700/50 flex items-center justify-center">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" class="text-slate-400" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <path d="M14 2v6h6"></path>
+                      </svg>
+                    </div>
+                    <div class="min-w-0">
+                      <div class="text-slate-200 text-sm truncate">${this.escapeHtml(msg.fileName || 'File')}</div>
+                      <div class="text-xs text-slate-500">${this.formatFileSize(msg.fileSize || 0)}</div>
                     </div>
                   </div>
-                </div>
-                
-                <!-- Progress overlay -->
-                <div class="absolute inset-0 flex items-center justify-center bg-black/30 rounded-xl">
-                  <svg class="w-16 h-16" viewBox="0 0 100 100">
-                    <circle cx="50" cy="50" r="45" fill="none" stroke="rgba(255, 255, 255, 0.2)" stroke-width="4" />
-                    <circle
-                      class="upload-progress-circle"
-                      cx="50" cy="50" r="45"
-                      fill="none" stroke="url(#gradient-${msg.id})"
-                      stroke-width="4" stroke-linecap="round"
-                      stroke-dasharray="${2 * Math.PI * 45}"
-                      stroke-dashoffset="${2 * Math.PI * 45}"
-                      transform="rotate(-90 50 50)"
-                      style="transition: stroke-dashoffset 0.3s ease;"
-                    />
-                    <defs>
-                      <linearGradient id="gradient-${msg.id}" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1" />
-                        <stop offset="100%" style="stop-color:#06b6d4;stop-opacity:1" />
-                      </linearGradient>
-                    </defs>
-                  </svg>
+                  <!-- Circular progress spinner on right -->
+                  <div class="flex-shrink-0 w-10 h-10 flex items-center justify-center upload-progress-container" data-temp-id="${msg.id}">
+                    <svg class="w-8 h-8" viewBox="0 0 100 100">
+                      <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255, 255, 255, 0.15)" stroke-width="6" />
+                      <circle
+                        class="upload-progress-circle"
+                        cx="50" cy="50" r="40"
+                        fill="none" stroke="url(#gradient-file-${msg.id})"
+                        stroke-width="6" stroke-linecap="round"
+                        stroke-dasharray="${2 * Math.PI * 40}"
+                        stroke-dashoffset="${2 * Math.PI * 40}"
+                        transform="rotate(-90 50 50)"
+                        style="transition: stroke-dashoffset 0.3s ease;"
+                      />
+                      <defs>
+                        <linearGradient id="gradient-file-${msg.id}" x1="0%" y1="0%" x2="100%" y2="100%">
+                          <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1" />
+                          <stop offset="100%" style="stop-color:#06b6d4;stop-opacity:1" />
+                        </linearGradient>
+                      </defs>
+                    </svg>
+                  </div>
                 </div>
               </div>
             `}
@@ -1561,6 +2082,64 @@ const SinkApp = {
 
   // Render chat content
   renderChat(messages, chatName) {
+    // Check if messages array is empty
+    if (!messages || messages.length === 0) {
+      document.getElementById('mainContent').innerHTML = `
+        <section class="flex flex-col h-full overflow-hidden">
+          <!-- Empty State -->
+          <div class="flex-1 flex items-center justify-center px-6">
+            <div class="text-center max-w-md">
+              <div class="text-slate-500 mb-2">
+                <svg class="mx-auto h-16 w-16 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                </svg>
+              </div>
+              <p class="text-slate-400 text-sm">No messages yet</p>
+              <p class="text-slate-500 text-xs mt-1">Start the conversation by sending a message below</p>
+            </div>
+          </div>
+
+          <!-- Message Input (fixed at bottom of chat area, centered inside chat column) -->
+          <div class="mt-auto px-3 md:px-6 pb-3 flex-shrink-0">
+            <div class="w-1/2 mx-auto">
+              <div class="flex items-end gap-2">
+                <textarea 
+                  id="messageInput"
+                  rows="1"
+                  placeholder="Type a message..."
+                  class="flex-1 rounded-lg bg-slate-800/50 border border-white/10 focus:border-slate-400/30 focus:outline-none focus:ring-2 focus:ring-white/10 px-4 py-3 text-slate-200 text-sm resize-none max-h-32 overflow-y-auto placeholder:text-slate-500"
+                  style="min-height: 44px;"
+                ></textarea>
+                <button 
+                  id="attachButton"
+                  type="button"
+                  class="flex-shrink-0 h-11 w-11 flex items-center justify-center rounded-lg border border-white/10 bg-slate-800/50 hover:bg-slate-700/50 text-slate-300 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+                  </svg>
+                </button>
+                <button 
+                  id="sendButton"
+                  type="button"
+                  class="flex-shrink-0 h-11 px-4 flex items-center justify-center rounded-lg border border-white/10 bg-blue-600 hover:bg-blue-700 text-white transition focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      `;
+
+      // Re-initialize composer for empty state
+      this.initializeComposer();
+      return;
+    }
+
     // Sort messages by createdAt timestamp (ascending order)
     const sortedMessages = [...messages].sort((a, b) => {
       const timeA = typeof a.createdAt === 'number' ? a.createdAt : new Date(a.createdAt || 0).getTime();
@@ -1571,11 +2150,11 @@ const SinkApp = {
     // Group messages by day and insert date separators
     let currentDay = null;
     const messagesWithSeparators = [];
-    
+
     sortedMessages.forEach(msg => {
       // Get the day for this message
       const messageDay = this.formatMessageDay(msg.createdAt);
-      
+
       // If day changed, insert date separator
       if (messageDay !== currentDay) {
         currentDay = messageDay;
@@ -1584,7 +2163,7 @@ const SinkApp = {
           text: messageDay
         });
       }
-      
+
       // Add the message with formatted time
       messagesWithSeparators.push({
         ...msg,
@@ -1729,11 +2308,11 @@ const SinkApp = {
     let hours = now.getHours();
     const minutes = now.getMinutes();
     const ampm = hours >= 12 ? 'PM' : 'AM';
-    
+
     hours = hours % 12;
     hours = hours ? hours : 12; // Handle midnight (0 hours)
     const minutesStr = minutes < 10 ? '0' + minutes : minutes;
-    
+
     return `${hours}:${minutesStr} ${ampm}`;
   },
 
@@ -1748,22 +2327,31 @@ const SinkApp = {
    * 4. Listener will merge when message arrives (no duplicate)
    */
   async sendMessageFromComposer() {
+    // CRITICAL: Prevent multiple simultaneous sends
+    if (this.isSending) {
+      console.warn('[sendMessage] Already sending, ignoring duplicate call');
+      return;
+    }
+    this.isSending = true;
+
     try {
       // Get the composer input
       const input = document.getElementById('floatingComposer');
       if (!input) {
         console.error('[sendMessage] Composer input not found');
+        this.isSending = false;
         return;
       }
 
       // Get and validate text
       const text = input.value.trim();
-      
+
       // Check if we have a pending attachment or text
       const hasPendingAttachment = this.pendingAttachment !== null && this.pendingAttachment !== undefined;
       const hasText = text.length > 0;
-      
+
       if (!hasPendingAttachment && !hasText) {
+        this.isSending = false;
         return; // Don't send empty messages
       }
 
@@ -1795,7 +2383,12 @@ const SinkApp = {
 
       // If attachment pending, handle file upload flow
       if (hasPendingAttachment) {
-        await this.uploadAndSendAttachment(threadType, threadId, messageText, currentUser);
+        // Clear attachment IMMEDIATELY to prevent duplicate sends
+        const attachmentToSend = this.pendingAttachment;
+        this.pendingAttachment = null;
+        this.hideUploadPreview();
+        await this.uploadAndSendAttachment(threadType, threadId, messageText, currentUser, attachmentToSend);
+        this.isSending = false;
         return;
       }
 
@@ -1807,7 +2400,10 @@ const SinkApp = {
       const tempId = this.genTempId();
       console.log(`[sendMessage] Generated tempId: ${tempId}`);
 
-      // 2. Create optimistic placeholder message
+      // 2. Get current user profile from cache (with avatar)
+      const currentUserProfile = await this.getUserProfile(currentUser.uid);
+
+      // 3. Create optimistic placeholder message with real avatar
       const placeholder = {
         id: tempId,
         tempId: tempId,
@@ -1815,7 +2411,8 @@ const SinkApp = {
         status: 'sending',
         text: messageText,
         senderId: currentUser.uid,
-        senderName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+        senderName: currentUserProfile?.displayName || currentUserProfile?.name || currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+        senderAvatar: currentUserProfile?.avatar || currentUserProfile?.photoURL || currentUserProfile?.profilePicture || null,
         createdAt: Date.now()
       };
 
@@ -1837,13 +2434,14 @@ const SinkApp = {
         type: 'text',
         text: messageText,
         senderId: currentUser.uid,
-        senderName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+        senderName: currentUserProfile?.displayName || currentUserProfile?.name || currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+        senderAvatar: currentUserProfile?.avatar || currentUserProfile?.photoURL || currentUserProfile?.profilePicture || null,
         createdAt: Date.now(),
         status: 'sent'
       };
 
       await window.firebaseService.saveMessage(threadType, threadId, messageToSave);
-      
+
       // 6. Update local placeholder status to 'sent'
       const tempBubble = document.querySelector(`[data-message-id="${tempId}"]`);
       if (tempBubble) {
@@ -1858,6 +2456,8 @@ const SinkApp = {
     } catch (error) {
       console.error('[sendMessage] ❌ Error:', error);
       this.showErrorToast('Failed to send message. Please check your connection and try again.');
+    } finally {
+      this.isSending = false;
     }
   },
 
@@ -1873,9 +2473,18 @@ const SinkApp = {
    * 5. Save to Firebase using same tempId as document key
    * 6. Listener will merge when message arrives (no duplicate)
    */
-  async uploadAndSendAttachment(threadType, threadId, caption, currentUser) {
-    const attachment = this.pendingAttachment;
-    if (!attachment || !attachment.file) {
+  async uploadAndSendAttachment(threadType, threadId, caption, currentUser, attachment = null) {
+    // CRITICAL: Prevent duplicate uploads
+    if (this.isUploading) {
+      console.warn('[uploadAttachment] Upload already in progress, ignoring duplicate call');
+      return;
+    }
+    this.isUploading = true;
+
+    // Use passed attachment or fallback to pending (for retry)
+    const attachmentToUse = attachment || this.pendingAttachment;
+    if (!attachmentToUse || !attachmentToUse.file) {
+      this.isUploading = false;
       throw new Error('No file to upload');
     }
 
@@ -1883,19 +2492,22 @@ const SinkApp = {
     const tempId = this.genTempId();
     console.log(`[uploadAttachment] Generated tempId: ${tempId}`);
 
-    // 2. Create local preview URL (blob URL for instant display)
-    const localPreviewUrl = URL.createObjectURL(attachment.file);
-    
+    // 2. Get current user profile from cache (with avatar)
+    const currentUserProfile = await this.getUserProfile(currentUser.uid);
+
+    // 3. Create local preview URL (blob URL for instant display)
+    const localPreviewUrl = URL.createObjectURL(attachmentToUse.file);
+
     // Get base64 preview for images (for fallback/compatibility)
     let previewDataUrl = null;
-    if (attachment.type.startsWith('image/')) {
-      previewDataUrl = await this.getImageDataURL(attachment.file);
+    if (attachmentToUse.type && attachmentToUse.type.startsWith('image/')) {
+      previewDataUrl = await this.getImageDataURL(attachmentToUse.file);
     }
 
     // Hide upload preview panel
     this.hideUploadPreview();
 
-    // 3. Create placeholder message
+    // 4. Create placeholder message with real avatar
     const placeholder = {
       id: tempId,
       tempId: tempId,
@@ -1903,11 +2515,12 @@ const SinkApp = {
       status: 'uploading',
       progress: 0,
       senderId: currentUser.uid,
-      senderName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+      senderName: currentUserProfile?.displayName || currentUserProfile?.name || currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+      senderAvatar: currentUserProfile?.avatar || currentUserProfile?.photoURL || currentUserProfile?.profilePicture || null,
       createdAt: Date.now(),
-      fileName: attachment.file.name,
-      fileType: attachment.file.type,
-      fileSize: attachment.file.size,
+      fileName: attachmentToUse.file.name,
+      fileType: attachmentToUse.file.type,
+      fileSize: attachmentToUse.file.size,
       localPreviewUrl: localPreviewUrl,  // Blob URL for instant preview
       previewDataUrl: previewDataUrl,    // Base64 for compatibility
       text: caption || ''
@@ -1928,7 +2541,7 @@ const SinkApp = {
       }
 
       const uploadResult = await window.uploadService.uploadFile(
-        attachment.file,
+        attachmentToUse.file,
         (progress) => {
           // Update progress in placeholder
           if (this.pendingMessages[tempId]) {
@@ -1944,15 +2557,16 @@ const SinkApp = {
       URL.revokeObjectURL(localPreviewUrl);
 
       // 6. Build final message object
-      const messageType = attachment.file.type.startsWith('image/') ? 'image' :
-                         attachment.file.type.startsWith('video/') ? 'video' : 'file';
+      const messageType = attachmentToUse.file.type.startsWith('image/') ? 'image' :
+        attachmentToUse.file.type.startsWith('video/') ? 'video' : 'file';
 
       const finalMessage = {
         id: tempId,  // CRITICAL: Use same tempId as document key
         tempId: tempId,
         type: messageType,
         senderId: currentUser.uid,
-        senderName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+        senderName: currentUserProfile?.displayName || currentUserProfile?.name || currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+        senderAvatar: currentUserProfile?.avatar || currentUserProfile?.photoURL || currentUserProfile?.profilePicture || null,
         createdAt: Date.now(),
         status: 'sent'
       };
@@ -1965,7 +2579,7 @@ const SinkApp = {
       } else {
         finalMessage.file = {
           url: uploadResult.url,
-          name: attachment.file.name,
+          name: attachmentToUse.file.name,
           size: uploadResult.size,
           mimeType: uploadResult.mimeType,
           public_id: uploadResult.public_id
@@ -2010,11 +2624,15 @@ const SinkApp = {
         threadId,
         caption,
         currentUser,
-        file: attachment.file
+        file: attachmentToUse.file
       });
 
       this.pendingAttachment = null;
       this.showErrorToast(`Upload failed: ${error.message}`);
+    } finally {
+      // CRITICAL: Always reset uploading flag to allow future uploads
+      this.isUploading = false;
+      console.log('[uploadAttachment] Reset isUploading flag');
     }
   },
 
@@ -2042,7 +2660,9 @@ const SinkApp = {
     // Update progress circle if it exists
     const circle = bubble.querySelector('.upload-progress-circle');
     if (circle) {
-      const circumference = 2 * Math.PI * 45;
+      // Get radius from the circle element (supports different sizes)
+      const radius = parseFloat(circle.getAttribute('r')) || 45;
+      const circumference = 2 * Math.PI * radius;
       const offset = circumference - (progress / 100) * circumference;
       circle.style.strokeDashoffset = offset;
     }
@@ -2072,13 +2692,27 @@ const SinkApp = {
     bubble.setAttribute('data-status', status);
 
     if (status === 'sent' || status === 'delivered') {
-      // Remove progress overlay
+      // Remove progress overlay for images/videos
       const progressOverlay = bubble.querySelector('.absolute.inset-0');
       if (progressOverlay) {
         progressOverlay.remove();
       }
 
-      // If uploadedUrl provided, replace preview with real URL
+      // Replace file upload spinner with download button
+      const fileProgressContainer = bubble.querySelector('.upload-progress-container');
+      if (fileProgressContainer && uploadedUrl) {
+        fileProgressContainer.outerHTML = `
+          <button onclick="SinkApp.downloadMedia('${uploadedUrl}')" class="flex-shrink-0 inline-flex items-center justify-center rounded-lg bg-slate-900/70 backdrop-blur-md p-2.5 text-white hover:bg-slate-900/80 transition cursor-pointer">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7,10 12,15 17,10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+          </button>
+        `;
+      }
+
+      // If uploadedUrl provided, replace preview with real URL for images
       if (uploadedUrl) {
         const img = bubble.querySelector('img[alt="Uploading"]');
         if (img) {
@@ -2113,7 +2747,7 @@ const SinkApp = {
             </button>
           </div>
         `;
-        
+
         const messageContent = bubble.querySelector('.max-w-\\[75\\%\\]') || bubble;
         messageContent.insertAdjacentHTML('beforeend', errorHTML);
       }
@@ -2136,7 +2770,7 @@ const SinkApp = {
    */
   async retryUpload(tempId) {
     console.log('[retryUpload] Retrying upload for tempId:', tempId);
-    
+
     if (!this.failedUploads || !this.failedUploads.has(tempId)) {
       console.error('[retryUpload] No failed upload data found for tempId:', tempId);
       return;
@@ -2152,10 +2786,10 @@ const SinkApp = {
       if (errorDiv) {
         errorDiv.remove();
       }
-      
+
       // Reset status to uploading
       this.updateMessageStatus(tempId, 'uploading');
-      
+
       // Re-add progress overlay
       const messageContent = tempBubble.querySelector('.relative');
       if (messageContent && !messageContent.querySelector('.absolute.inset-0')) {
@@ -2183,7 +2817,7 @@ const SinkApp = {
     this.pendingAttachment = {
       file: uploadData.file
     };
-    
+
     await this.uploadAndSendAttachment(
       uploadData.threadType,
       uploadData.threadId,
@@ -2302,7 +2936,7 @@ const SinkApp = {
 
     // Show preview
     preview.classList.remove('hidden');
-    
+
     // Scroll messages up to accommodate the preview height
     // Wait a bit for the preview to render, then scroll
     setTimeout(() => {
@@ -2344,7 +2978,7 @@ const SinkApp = {
     const preview = document.getElementById('uploadPreview');
     if (preview) {
       preview.classList.add('hidden');
-      
+
       // Scroll messages back down after hiding preview
       setTimeout(() => {
         this.scrollToBottom();
@@ -2373,7 +3007,7 @@ const SinkApp = {
     if (this.pendingAttachment && this.pendingAttachment.url) {
       console.log('[cancelFileUpload] ⚠️ File remains on Cloudinary (cannot delete with unsigned uploads):', this.pendingAttachment.url);
     }
-    
+
     // Clear the file input
     const fileInput = document.getElementById('attachmentInput');
     if (fileInput) {
@@ -2382,7 +3016,7 @@ const SinkApp = {
 
     // Reset upload state
     this.isUploading = false;
-    
+
     // Clear pending attachment
     this.pendingAttachment = null;
 
@@ -2453,7 +3087,7 @@ const SinkApp = {
   initializeComposer() {
     setTimeout(() => {
       const input = document.getElementById('floatingComposer');
-      if(!input) return;
+      if (!input) return;
 
       // Focus the input when composer is initialized
       input.focus();
@@ -2487,7 +3121,7 @@ const SinkApp = {
   // ========== END COMPOSER SUBSYSTEM ==========
 
   // ========== TEST HELPERS ==========
-  
+
   /**
    * Test function to simulate sending a message (for testing real-time updates)
    * Usage in console:
@@ -2497,7 +3131,7 @@ const SinkApp = {
    */
   async testSendMessage(threadType, threadId, text) {
     console.log(`[testSendMessage] Sending test message to ${threadType}:${threadId}`);
-    
+
     if (!window.firebaseService || !window.firebaseService.sendMessage) {
       console.error('[testSendMessage] firebaseService.sendMessage not available');
       return;

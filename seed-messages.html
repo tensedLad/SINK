@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SINK - Complete Database Seeder</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 50%, #0d1f2d 100%);
+      min-height: 100vh;
+      padding: 30px 20px;
+      color: #e0e0e0;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 20px;
+      padding: 32px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+    }
+
+    h1 {
+      color: #fff;
+      margin-bottom: 8px;
+      font-size: 2rem;
+      background: linear-gradient(90deg, #6366f1, #a855f7, #22c55e);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .subtitle {
+      color: #9ca3af;
+      margin-bottom: 28px;
+      font-size: 0.95rem;
+    }
+
+    .section {
+      background: rgba(0, 0, 0, 0.25);
+      border-radius: 14px;
+      padding: 20px;
+      margin-bottom: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .section h3 {
+      color: #818cf8;
+      margin-bottom: 14px;
+      font-size: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn {
+      background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 0.95rem;
+      font-weight: 600;
+      transition: all 0.2s ease;
+      margin: 4px;
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4);
+    }
+
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-green {
+      background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+    }
+
+    .btn-orange {
+      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+    }
+
+    .btn-red {
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+    }
+
+    .btn-lg {
+      padding: 16px 32px;
+      font-size: 1.1rem;
+    }
+
+    .log {
+      background: #0a0a0f;
+      border-radius: 10px;
+      padding: 16px;
+      max-height: 350px;
+      overflow-y: auto;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 12px;
+      line-height: 1.7;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .log-success {
+      color: #4ade80;
+    }
+
+    .log-error {
+      color: #f87171;
+    }
+
+    .log-info {
+      color: #60a5fa;
+    }
+
+    .log-warning {
+      color: #fbbf24;
+    }
+
+    .log-header {
+      color: #c084fc;
+      font-weight: bold;
+      margin-top: 8px;
+    }
+
+    .input-group {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+
+    .input-group input {
+      flex: 1;
+      min-width: 150px;
+      padding: 12px 16px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(0, 0, 0, 0.4);
+      color: #e0e0e0;
+      font-size: 14px;
+    }
+
+    .input-group input::placeholder {
+      color: #6b7280;
+    }
+
+    .status-box {
+      background: rgba(34, 197, 94, 0.1);
+      border: 1px solid rgba(34, 197, 94, 0.3);
+      border-radius: 10px;
+      padding: 14px 18px;
+      margin-bottom: 14px;
+    }
+
+    .status-box.error {
+      background: rgba(239, 68, 68, 0.1);
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+
+    .status-box code {
+      background: rgba(0, 0, 0, 0.4);
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      color: #fbbf24;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .divider {
+      height: 1px;
+      background: rgba(255, 255, 255, 0.1);
+      margin: 20px 0;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>🌊 SINK Complete Database Seeder</h1>
+    <p class="subtitle">Creates fresh data in Firebase RTDB + Firestore from scratch</p>
+
+    <!-- Auth Section -->
+    <div class="section">
+      <h3>🔐 Authentication</h3>
+      <div class="input-group" id="loginForm">
+        <input type="email" id="email" placeholder="Email (e.g. adi@sink.in)">
+        <input type="password" id="password" placeholder="Password">
+        <button class="btn" onclick="login()">Login</button>
+      </div>
+      <div class="status-box" id="authStatus" style="display:none;"></div>
+    </div>
+
+    <!-- Seed All Section -->
+    <div class="section" id="seedSection" style="display:none;">
+      <h3>🚀 Full Database Seed</h3>
+      <p style="color:#9ca3af; margin-bottom:16px; font-size:0.9rem;">
+        This will create: Users in RTDB, User Profiles in Firestore, a "General" Room,
+        a DM thread between you and a test user, and sample messages in both.
+      </p>
+      <div class="controls">
+        <button class="btn btn-green btn-lg" onclick="seedEverything()" id="seedAllBtn">
+          ⚡ SEED EVERYTHING (Fresh Start)
+        </button>
+      </div>
+
+      <div class="divider"></div>
+
+      <h3>🔧 Individual Actions</h3>
+      <div class="controls">
+        <button class="btn btn-orange" onclick="seedUsers()">👥 Seed Users</button>
+        <button class="btn btn-orange" onclick="seedRoom()">🏠 Seed Room</button>
+        <button class="btn btn-orange" onclick="seedDM()">💬 Seed DM</button>
+        <button class="btn btn-orange" onclick="seedRoomMessages()">📝 Room Messages</button>
+        <button class="btn btn-orange" onclick="seedDmMessages()">📝 DM Messages</button>
+      </div>
+    </div>
+
+    <!-- Log Section -->
+    <div class="section">
+      <h3>📋 Activity Log</h3>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getAuth, signInWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+    import { getDatabase, ref, set } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+    import { getFirestore, doc, setDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+    // Firebase Config
+    const app = initializeApp({
+      apiKey: "AIzaSyDFa9_Zj-EZ8_wpERlGPhMwyFfeMkwugg8",
+      authDomain: "sink-ecosystem.firebaseapp.com",
+      projectId: "sink-ecosystem",
+      storageBucket: "sink-ecosystem.appspot.com",
+      messagingSenderId: "437922605443",
+      appId: "1:437922605443:web:4d9a01f4ea94a8f045aeb6",
+      databaseURL: "https://sink-ecosystem-default-rtdb.firebaseio.com",
+    });
+
+    const auth = getAuth(app);
+    const rtdb = getDatabase(app);
+    const firestore = getFirestore(app);
+
+    let currentUser = null;
+
+    // ============================================================
+    // DATA TEMPLATES
+    // ============================================================
+
+    // We'll create a test user alongside the logged-in user
+    const TEST_USER = {
+      uid: 'test_user_tony_stark_001',
+      name: 'Tony Stark',
+      username: 'tony',
+      email: 'tony@stark.industries',
+      avatar: 'https://ui-avatars.com/api/?name=Tony+Stark&background=ef4444&color=fff&size=128',
+      status: 'online'
+    };
+
+    const ROOM_ID = 'general';
+
+    const ROOM_MESSAGES = [
+      "Welcome to the General room! 🎉",
+      "Hey everyone, great to be here!",
+      "This is where we discuss everything",
+      "Feel free to share ideas and updates",
+      "Looking forward to collaborating! 💪",
+      "Quick reminder: sprint review tomorrow at 10am",
+      "Thanks for the heads up!",
+      "I'll have my demo ready by then",
+      "Perfect, can't wait to see what you've built",
+      "The new feature is coming along nicely 🚀",
+      "Let me know if anyone needs help with anything",
+      "Will do! You're the best 🙌",
+      "Just pushed the latest changes to staging",
+      "Awesome! I'll test it right away",
+      "All tests passing now ✅"
+    ];
+
+    const DM_MESSAGES = [
+      "Hey! How's it going?",
+      "Pretty good! Working on the new reactor design",
+      "That sounds exciting! Any breakthroughs?",
+      "Yeah, finally cracked the efficiency problem",
+      "Amazing! You're always pushing boundaries",
+      "Haha thanks! It's what I do 😎",
+      "When can I see a demo?",
+      "Come by the lab tomorrow, I'll show you",
+      "Perfect! I'll bring coffee ☕",
+      "You know me too well",
+      "So about that project we discussed...",
+      "Yes! I've been thinking about it",
+      "I have some ideas to share",
+      "Send them over, I'm all ears",
+      "Will do! Talk soon 👋"
+    ];
+
+    // ============================================================
+    // LOGGING
+    // ============================================================
+    function log(message, type = 'info') {
+      const logEl = document.getElementById('log');
+      const entry = document.createElement('div');
+      entry.className = `log-${type}`;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      logEl.appendChild(entry);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function logHeader(message) {
+      const logEl = document.getElementById('log');
+      const entry = document.createElement('div');
+      entry.className = 'log-header';
+      entry.textContent = `\n══════ ${message} ══════`;
+      logEl.appendChild(entry);
+    }
+
+    function genId() {
+      const chars = '-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz';
+      let id = '';
+      const ts = Date.now();
+      for (let i = 7; i >= 0; i--) id += chars.charAt((ts / Math.pow(64, i)) % 64 | 0);
+      for (let i = 0; i < 12; i++) id += chars.charAt(Math.random() * 64 | 0);
+      return id;
+    }
+
+    function getDmThreadId(uid1, uid2) {
+      const sorted = [uid1, uid2].sort();
+      return `dm_${sorted[0]}_${sorted[1]}`;
+    }
+
+    // ============================================================
+    // AUTH
+    // ============================================================
+    onAuthStateChanged(auth, (user) => {
+      currentUser = user;
+      const authStatus = document.getElementById('authStatus');
+      const loginForm = document.getElementById('loginForm');
+      const seedSection = document.getElementById('seedSection');
+
+      if (user) {
+        loginForm.style.display = 'none';
+        seedSection.style.display = 'block';
+        authStatus.style.display = 'block';
+        authStatus.className = 'status-box';
+        authStatus.innerHTML = `
+          ✅ <strong>Logged in as ${user.email}</strong><br>
+          Your UID: <code>${user.uid}</code><br>
+          Display Name: ${user.displayName || 'Not set'}
+        `;
+        log(`Authenticated as ${user.email}`, 'success');
+        log(`Your UID: ${user.uid}`, 'info');
+      } else {
+        loginForm.style.display = 'flex';
+        seedSection.style.display = 'none';
+        authStatus.style.display = 'none';
+      }
+    });
+
+    window.login = async () => {
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+      try {
+        await signInWithEmailAndPassword(auth, email, password);
+        log('Login successful!', 'success');
+      } catch (e) {
+        log(`Login failed: ${e.message}`, 'error');
+      }
+    };
+
+    // ============================================================
+    // SEED USERS (RTDB + Firestore)
+    // ============================================================
+    window.seedUsers = async () => {
+      logHeader('SEEDING USERS');
+
+      const now = Date.now();
+
+      // Current logged-in user
+      const myUser = {
+        uid: currentUser.uid,
+        name: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+        username: currentUser.email?.split('@')[0] || 'user',
+        email: currentUser.email,
+        avatar: currentUser.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser.displayName || 'User')}&background=6366f1&color=fff&size=128`,
+        status: 'online',
+        lastSeen: now
+      };
+
+      // 1. Save current user to RTDB
+      try {
+        await set(ref(rtdb, `users/${myUser.uid}`), myUser);
+        log(`✅ RTDB: Created user "${myUser.name}" (${myUser.uid})`, 'success');
+      } catch (e) {
+        log(`❌ RTDB user creation failed: ${e.message}`, 'error');
+      }
+
+      // 2. Save current user to Firestore user_profiles
+      try {
+        await setDoc(doc(firestore, 'user_profiles', myUser.uid), {
+          ...myUser,
+          createdAt: new Date().toISOString(),
+          displayName: myUser.name
+        });
+        log(`✅ Firestore: Created user_profile for "${myUser.name}"`, 'success');
+      } catch (e) {
+        log(`❌ Firestore user_profile failed: ${e.message}`, 'error');
+      }
+
+      // 3. Save test user (Tony Stark) to RTDB
+      try {
+        await set(ref(rtdb, `users/${TEST_USER.uid}`), {
+          ...TEST_USER,
+          lastSeen: now
+        });
+        log(`✅ RTDB: Created test user "${TEST_USER.name}" (${TEST_USER.uid})`, 'success');
+      } catch (e) {
+        log(`❌ RTDB test user failed: ${e.message}`, 'error');
+      }
+
+      // 4. Save test user to Firestore
+      try {
+        await setDoc(doc(firestore, 'user_profiles', TEST_USER.uid), {
+          ...TEST_USER,
+          createdAt: new Date().toISOString(),
+          displayName: TEST_USER.name
+        });
+        log(`✅ Firestore: Created user_profile for "${TEST_USER.name}"`, 'success');
+      } catch (e) {
+        log(`❌ Firestore test user_profile failed: ${e.message}`, 'error');
+      }
+
+      log('Users seeding complete!', 'info');
+      return myUser;
+    };
+
+    // ============================================================
+    // SEED ROOM (Firestore)
+    // ============================================================
+    window.seedRoom = async () => {
+      logHeader('SEEDING ROOM');
+
+      const now = Date.now();
+
+      const roomData = {
+        id: ROOM_ID,
+        name: 'General',
+        description: 'General discussion room for the team',
+        icon: '#',
+        members: [currentUser.uid, TEST_USER.uid],
+        createdAt: now,
+        lastMessage: '',
+        lastMessageTime: now,
+        lastMessageSender: ''
+      };
+
+      try {
+        await setDoc(doc(firestore, 'rooms', ROOM_ID), roomData);
+        log(`✅ Firestore: Created room "General" (${ROOM_ID})`, 'success');
+        log(`   Members: You + ${TEST_USER.name}`, 'info');
+      } catch (e) {
+        log(`❌ Room creation failed: ${e.message}`, 'error');
+      }
+
+      // Create threadMeta for room
+      try {
+        await setDoc(doc(firestore, 'threadMeta', `room_${ROOM_ID}`), {
+          threadType: 'room',
+          threadId: ROOM_ID,
+          createdAt: now,
+          lastUpdated: now,
+          unreadCounts: { [currentUser.uid]: 0, [TEST_USER.uid]: 0 },
+          lastSeen: { [currentUser.uid]: now, [TEST_USER.uid]: now }
+        });
+        log(`✅ Firestore: Created threadMeta for room`, 'success');
+      } catch (e) {
+        log(`⚠️ threadMeta creation failed (non-critical): ${e.message}`, 'warning');
+      }
+
+      log('Room seeding complete!', 'info');
+    };
+
+    // ============================================================
+    // SEED DM (Firestore)
+    // ============================================================
+    window.seedDM = async () => {
+      logHeader('SEEDING DM THREAD');
+
+      const now = Date.now();
+      const dmId = getDmThreadId(currentUser.uid, TEST_USER.uid);
+
+      const myProfile = {
+        name: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+        avatar: currentUser.photoURL || `https://ui-avatars.com/api/?name=User&background=6366f1&color=fff`
+      };
+
+      const dmData = {
+        id: dmId,
+        type: 'dm',
+        members: [currentUser.uid, TEST_USER.uid],
+        memberDetails: {
+          [currentUser.uid]: { name: myProfile.name, avatar: myProfile.avatar },
+          [TEST_USER.uid]: { name: TEST_USER.name, avatar: TEST_USER.avatar }
+        },
+        createdAt: now,
+        lastMessage: '',
+        lastMessageTime: now,
+        lastMessageSender: ''
+      };
+
+      try {
+        await setDoc(doc(firestore, 'dms', dmId), dmData);
+        log(`✅ Firestore: Created DM thread`, 'success');
+        log(`   ID: ${dmId}`, 'info');
+        log(`   Between: You ↔ ${TEST_USER.name}`, 'info');
+      } catch (e) {
+        log(`❌ DM creation failed: ${e.message}`, 'error');
+      }
+
+      // Create threadMeta for DM
+      try {
+        await setDoc(doc(firestore, 'threadMeta', `dm_${dmId}`), {
+          threadType: 'dm',
+          threadId: dmId,
+          createdAt: now,
+          lastUpdated: now,
+          unreadCounts: { [currentUser.uid]: 0, [TEST_USER.uid]: 0 },
+          lastSeen: { [currentUser.uid]: now, [TEST_USER.uid]: now }
+        });
+        log(`✅ Firestore: Created threadMeta for DM`, 'success');
+      } catch (e) {
+        log(`⚠️ DM threadMeta failed (non-critical): ${e.message}`, 'warning');
+      }
+
+      log('DM seeding complete!', 'info');
+      return dmId;
+    };
+
+    // ============================================================
+    // SEED ROOM MESSAGES (RTDB)
+    // ============================================================
+    window.seedRoomMessages = async () => {
+      logHeader('SEEDING ROOM MESSAGES');
+
+      const now = Date.now();
+      const oneHourAgo = now - (60 * 60 * 1000);
+      const interval = (now - oneHourAgo) / ROOM_MESSAGES.length;
+
+      const myProfile = {
+        name: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+        avatar: currentUser.photoURL || `https://ui-avatars.com/api/?name=User&background=6366f1&color=fff`
+      };
+
+      let success = 0;
+
+      for (let i = 0; i < ROOM_MESSAGES.length; i++) {
+        const text = ROOM_MESSAGES[i];
+        const msgTime = Math.floor(oneHourAgo + (i * interval));
+
+        // Alternate between current user and test user
+        const isMyMessage = i % 2 === 0;
+        const sender = isMyMessage ?
+          { uid: currentUser.uid, name: myProfile.name, avatar: myProfile.avatar } :
+          { uid: TEST_USER.uid, name: TEST_USER.name, avatar: TEST_USER.avatar };
+
+        const message = {
+          id: genId(),
+          senderId: sender.uid,
+          senderName: sender.name,
+          senderAvatar: sender.avatar,
+          type: 'text',
+          text: text,
+          createdAt: msgTime
+        };
+
+        try {
+          await set(ref(rtdb, `messages/rooms/${ROOM_ID}/${message.id}`), message);
+          success++;
+          const senderLabel = isMyMessage ? 'You' : TEST_USER.name;
+          log(`✅ [${i + 1}/${ROOM_MESSAGES.length}] ${senderLabel}: "${text.substring(0, 30)}..."`, 'success');
+        } catch (e) {
+          log(`❌ [${i + 1}] Failed: ${e.message}`, 'error');
+        }
+      }
+
+      // Update lastMessage in Firestore
+      try {
+        await setDoc(doc(firestore, 'rooms', ROOM_ID), {
+          lastMessage: ROOM_MESSAGES[ROOM_MESSAGES.length - 1],
+          lastMessageTime: now,
+          lastMessageSender: currentUser.uid
+        }, { merge: true });
+        log('✅ Updated room lastMessage in Firestore', 'success');
+      } catch (e) {
+        log(`⚠️ Could not update lastMessage: ${e.message}`, 'warning');
+      }
+
+      log(`Room messages complete: ${success}/${ROOM_MESSAGES.length}`, 'info');
+    };
+
+    // ============================================================
+    // SEED DM MESSAGES (RTDB)
+    // ============================================================
+    window.seedDmMessages = async () => {
+      logHeader('SEEDING DM MESSAGES');
+
+      const dmId = getDmThreadId(currentUser.uid, TEST_USER.uid);
+      const now = Date.now();
+      const oneHourAgo = now - (60 * 60 * 1000);
+      const interval = (now - oneHourAgo) / DM_MESSAGES.length;
+
+      const myProfile = {
+        name: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+        avatar: currentUser.photoURL || `https://ui-avatars.com/api/?name=User&background=6366f1&color=fff`
+      };
+
+      let success = 0;
+
+      for (let i = 0; i < DM_MESSAGES.length; i++) {
+        const text = DM_MESSAGES[i];
+        const msgTime = Math.floor(oneHourAgo + (i * interval));
+
+        // Alternate messages between users
+        const isMyMessage = i % 2 === 0;
+        const sender = isMyMessage ?
+          { uid: currentUser.uid, name: myProfile.name, avatar: myProfile.avatar } :
+          { uid: TEST_USER.uid, name: TEST_USER.name, avatar: TEST_USER.avatar };
+
+        const message = {
+          id: genId(),
+          senderId: sender.uid,
+          senderName: sender.name,
+          senderAvatar: sender.avatar,
+          type: 'text',
+          text: text,
+          createdAt: msgTime
+        };
+
+        try {
+          await set(ref(rtdb, `messages/dms/${dmId}/${message.id}`), message);
+          success++;
+          const senderLabel = isMyMessage ? 'You' : TEST_USER.name;
+          log(`✅ [${i + 1}/${DM_MESSAGES.length}] ${senderLabel}: "${text.substring(0, 30)}..."`, 'success');
+        } catch (e) {
+          log(`❌ [${i + 1}] Failed: ${e.message}`, 'error');
+        }
+      }
+
+      // Update lastMessage in Firestore
+      try {
+        await setDoc(doc(firestore, 'dms', dmId), {
+          lastMessage: DM_MESSAGES[DM_MESSAGES.length - 1],
+          lastMessageTime: now,
+          lastMessageSender: currentUser.uid
+        }, { merge: true });
+        log('✅ Updated DM lastMessage in Firestore', 'success');
+      } catch (e) {
+        log(`⚠️ Could not update DM lastMessage: ${e.message}`, 'warning');
+      }
+
+      log(`DM messages complete: ${success}/${DM_MESSAGES.length}`, 'info');
+    };
+
+    // ============================================================
+    // SEED EVERYTHING
+    // ============================================================
+    window.seedEverything = async () => {
+      const btn = document.getElementById('seedAllBtn');
+      btn.disabled = true;
+      btn.textContent = '⏳ Seeding...';
+
+      log('', 'info');
+      log('🚀 ═══════════════════════════════════════', 'header');
+      log('    STARTING COMPLETE DATABASE SEED', 'header');
+      log('═══════════════════════════════════════════', 'header');
+
+      try {
+        await seedUsers();
+        await new Promise(r => setTimeout(r, 300));
+
+        await seedRoom();
+        await new Promise(r => setTimeout(r, 300));
+
+        await seedDM();
+        await new Promise(r => setTimeout(r, 300));
+
+        await seedRoomMessages();
+        await new Promise(r => setTimeout(r, 300));
+
+        await seedDmMessages();
+
+        log('', 'info');
+        log('═══════════════════════════════════════════', 'success');
+        log('🎉 ALL DONE! DATABASE SEEDED SUCCESSFULLY!', 'success');
+        log('═══════════════════════════════════════════', 'success');
+        log('', 'info');
+        log('👉 Now refresh your SINK app to see the data!', 'info');
+        log('📌 You have 1 Room (General) and 1 DM (with Tony Stark)', 'info');
+
+      } catch (e) {
+        log(`❌ Seeding failed: ${e.message}`, 'error');
+      }
+
+      btn.disabled = false;
+      btn.textContent = '⚡ SEED EVERYTHING (Fresh Start)';
+    };
+
+    // Init
+    log('🌊 SINK Complete Database Seeder', 'info');
+    log('Login to get started...', 'info');
+  </script>
+</body>
+
+</html>
